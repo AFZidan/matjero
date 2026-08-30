@@ -30,6 +30,9 @@ jobs:
           go-version: "1.26.x"
       - run: gofmt -w $(find apps packages -name '*.go')
       - run: git diff --exit-code
+      - run: go run ./cmd/openapi-gen
+      - run: go test ./internal/openapi
+      - run: git diff --exit-code -- docs/api
       - run: go vet ./...
       - run: go test ./...
 

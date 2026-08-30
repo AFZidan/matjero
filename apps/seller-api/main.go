@@ -7,6 +7,7 @@ import (
 	"dropshipping/internal/actorapi"
 	"dropshipping/internal/commerce"
 	"dropshipping/internal/markets"
+	"dropshipping/internal/openapi"
 	"dropshipping/internal/platformapi"
 	"dropshipping/packages/auth"
 	"dropshipping/packages/config"
@@ -60,6 +61,20 @@ func run(ctx context.Context) error {
 			return db.Ping(ctx)
 		},
 	})
+	if spec, err := openapi.BuildSellerSpec(); err == nil {
+		if specBytes, err := openapi.MarshalDocument(spec); err == nil {
+			router.Mount("/", openapi.NewRouter(openapi.RouterConfig{
+				Enabled:   cfg.OpenAPIDocsEnabled,
+				SpecPath:  "/openapi.json",
+				DocsPath:  "/docs",
+				SpecBytes: specBytes,
+			}))
+		} else {
+			return err
+		}
+	} else {
+		return err
+	}
 	router.Mount("/", actorapi.NewRouter(actorapi.Config{
 		AppName:      "Seller API",
 		Actor:        "seller",

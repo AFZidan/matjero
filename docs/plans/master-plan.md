@@ -3225,6 +3225,7 @@ A phase is complete only when:
 * Authorization is tested.
 * Database migrations are tested.
 * API contracts are documented.
+* Generated OpenAPI/Swagger specs are updated, validated, and kept in sync with the code whenever endpoints, schemas, auth, pagination, or filtering change.
 * Events/contracts are documented.
 * Observability exists.
 * Failure behavior is tested.
