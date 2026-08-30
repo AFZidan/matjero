@@ -9,7 +9,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
-	"dropshipping/packages/config"
+	"matjero/packages/config"
 )
 
 type Shutdown func(context.Context) error

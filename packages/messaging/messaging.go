@@ -7,7 +7,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"dropshipping/packages/events"
+	"matjero/packages/events"
 )
 
 type Publisher interface {

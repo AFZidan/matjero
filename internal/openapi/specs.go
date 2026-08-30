@@ -5,10 +5,10 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"dropshipping/internal/api"
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/markets"
-	"dropshipping/packages/httpx"
+	"matjero/internal/api"
+	"matjero/internal/commerce"
+	"matjero/internal/markets"
+	"matjero/packages/httpx"
 )
 
 func BuildAdminSpec() (*openapi3.T, error) {

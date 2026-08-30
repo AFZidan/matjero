@@ -7,7 +7,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"dropshipping/internal/openapi"
+	"matjero/internal/openapi"
 )
 
 func main() {

@@ -7,11 +7,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"dropshipping/internal/api"
-	"dropshipping/internal/markets"
-	"dropshipping/packages/auth"
-	"dropshipping/packages/httpx"
-	"dropshipping/packages/i18n"
+	"matjero/internal/api"
+	"matjero/internal/markets"
+	"matjero/packages/auth"
+	"matjero/packages/httpx"
+	"matjero/packages/i18n"
 )
 
 type Config struct {
@@ -19,7 +19,7 @@ type Config struct {
 	Actor        string
 	RequireAuth  bool
 	AllowedRoles []string
-	Register    func(r chi.Router)
+	Register     func(r chi.Router)
 }
 
 type MarketService interface {

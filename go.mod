@@ -1,4 +1,4 @@
-module dropshipping
+module matjero
 
 go 1.26
 

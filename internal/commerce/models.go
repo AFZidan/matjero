@@ -3,7 +3,7 @@ package commerce
 import (
 	"time"
 
-	"dropshipping/packages/money"
+	"matjero/packages/money"
 )
 
 type Supplier struct {

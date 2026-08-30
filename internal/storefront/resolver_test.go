@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/packages/config"
+	"matjero/internal/commerce"
+	"matjero/packages/config"
 )
 
 // fakeLookup is an in-memory StoreLookup for tests.

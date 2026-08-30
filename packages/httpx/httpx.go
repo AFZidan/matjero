@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"dropshipping/packages/config"
+	"matjero/packages/config"
 )
 
 type contextKey string

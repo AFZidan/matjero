@@ -208,7 +208,7 @@ func schemaRefForType(t reflect.Type, cache map[reflect.Type]*openapi3.SchemaRef
 		return &openapi3.SchemaRef{Value: openapi3.NewDateTimeSchema()}, nil
 	}
 
-	if t.PkgPath() == "dropshipping/packages/money" && t.Name() == "Money" {
+	if t.PkgPath() == "matjero/packages/money" && t.Name() == "Money" {
 		schema := openapi3.NewObjectSchema().
 			WithProperty("amount_minor", openapi3.NewInt64Schema()).
 			WithProperty("currency", openapi3.NewStringSchema()).

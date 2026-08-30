@@ -1,6 +1,6 @@
 package openapi
 
-import "dropshipping/internal/platformapi"
+import "matjero/internal/platformapi"
 
 type CollectionResponse[T any] = platformapi.CollectionResponse[T]
 type StatusResponse = platformapi.StatusResponse

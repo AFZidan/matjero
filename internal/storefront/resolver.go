@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/packages/config"
+	"matjero/internal/commerce"
+	"matjero/packages/config"
 )
 
 // NormalizeHost lowercases a host and strips any port and surrounding whitespace,

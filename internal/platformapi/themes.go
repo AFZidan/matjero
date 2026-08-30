@@ -6,9 +6,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/themes"
-	"dropshipping/packages/httpx"
+	"matjero/internal/commerce"
+	"matjero/internal/themes"
+	"matjero/packages/httpx"
 )
 
 // ThemeDependencies wires the Theme Engine into the seller API. The Commerce
@@ -62,6 +62,10 @@ func writeThemeError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusBadRequest, "unsafe_content", "configuration contains prohibited executable content")
 	case errors.Is(err, themes.ErrInvalidInput):
 		httpx.WriteError(w, http.StatusBadRequest, "validation_error", "invalid input")
+	case errors.Is(err, themes.ErrPreviewNotConfigured):
+		// Misconfiguration, not a client error: preview is unavailable until
+		// THEME_PREVIEW_SECRET is set. Never fall back to an unsigned token.
+		httpx.WriteError(w, http.StatusServiceUnavailable, "preview_unavailable", "theme preview is not configured")
 	default:
 		httpx.WriteError(w, http.StatusInternalServerError, "internal_error", "internal error")
 	}

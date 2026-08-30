@@ -1,9 +1,9 @@
 package platformapi
 
 import (
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/markets"
-	"dropshipping/packages/money"
+	"matjero/internal/commerce"
+	"matjero/internal/markets"
+	"matjero/packages/money"
 )
 
 type CollectionResponse[T any] struct {

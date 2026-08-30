@@ -7,8 +7,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"dropshipping/packages/events"
-	"dropshipping/packages/money"
+	"matjero/packages/events"
+	"matjero/packages/money"
 )
 
 const (

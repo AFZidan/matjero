@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"dropshipping/internal/markets"
-	"dropshipping/packages/auth"
-	"dropshipping/packages/i18n"
+	"matjero/internal/markets"
+	"matjero/packages/auth"
+	"matjero/packages/i18n"
 )
 
 func TestRouterBootstrapIncludesPrincipalAndLocale(t *testing.T) {

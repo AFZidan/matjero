@@ -1,9 +1,9 @@
 package api
 
 import (
-	"dropshipping/internal/markets"
-	"dropshipping/packages/auth"
-	"dropshipping/packages/i18n"
+	"matjero/internal/markets"
+	"matjero/packages/auth"
+	"matjero/packages/i18n"
 )
 
 type Bootstrap struct {

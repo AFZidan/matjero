@@ -6,18 +6,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"dropshipping/internal/actorapi"
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/markets"
-	"dropshipping/internal/openapi"
-	"dropshipping/internal/platformapi"
-	"dropshipping/internal/themes"
-	"dropshipping/packages/auth"
-	"dropshipping/packages/config"
-	"dropshipping/packages/database"
-	"dropshipping/packages/httpx"
-	"dropshipping/packages/logging"
-	"dropshipping/packages/observability"
+	"matjero/internal/actorapi"
+	"matjero/internal/commerce"
+	"matjero/internal/markets"
+	"matjero/internal/openapi"
+	"matjero/internal/platformapi"
+	"matjero/internal/themes"
+	"matjero/packages/auth"
+	"matjero/packages/config"
+	"matjero/packages/database"
+	"matjero/packages/httpx"
+	"matjero/packages/logging"
+	"matjero/packages/observability"
 )
 
 func main() {

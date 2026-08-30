@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"dropshipping/internal/testdb"
-	"dropshipping/packages/database"
-	"dropshipping/packages/i18n"
+	"matjero/internal/testdb"
+	"matjero/packages/database"
+	"matjero/packages/i18n"
 )
 
 func TestRepositoryReadsSeededMarkets(t *testing.T) {

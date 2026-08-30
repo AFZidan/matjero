@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"dropshipping/packages/money"
+	"matjero/packages/money"
 )
 
 func (r Repository) GetSupplierByID(ctx context.Context, supplierID string) (Supplier, error) {

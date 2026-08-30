@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"dropshipping/packages/i18n"
+	"matjero/packages/i18n"
 )
 
 type Repository struct {

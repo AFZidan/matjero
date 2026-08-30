@@ -5,14 +5,15 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/testdb"
-	"dropshipping/packages/database"
+	"matjero/internal/commerce"
+	"matjero/internal/testdb"
+	"matjero/packages/database"
 )
 
 type themesTestEnv struct {
@@ -345,6 +346,245 @@ func TestPreviewTokenLifecycle(t *testing.T) {
 	other := NewService(e.repo, commerce.NewRepository(e.pool.Pool), Options{PreviewSecret: []byte("other-secret"), Clock: clock})
 	if _, err := other.VerifyPreviewToken(token); err == nil {
 		t.Fatal("expected token signed with different secret to fail")
+	}
+}
+
+// --- Correctness regressions ---
+
+// TestFailedInstallRollsBackDeactivation proves install/switch is atomic. The
+// composite FK violation below fires on the installation INSERT, after the
+// previous installation has already been deactivated inside the same
+// transaction. If the sequence were not transactional the store would be left
+// with no active theme at all.
+func TestFailedInstallRollsBackDeactivation(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install default: %v", err)
+	}
+	before, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation before: %v", err)
+	}
+
+	// A version belonging to a different theme violates the composite FK.
+	other, err := e.repo.CreateTheme(e.ctx, "other-theme", "Other", "", ThemeTypeFree, ThemeStatusActive)
+	if err != nil {
+		t.Fatalf("create other theme: %v", err)
+	}
+	otherVersion, err := e.repo.CreateThemeVersion(e.ctx, other.ID, "1.0.0", ThemeVersionStatusPublished, DefaultConfigurationSchema, DefaultConfiguration, "1.0.0")
+	if err != nil {
+		t.Fatalf("create other version: %v", err)
+	}
+	theme, err := e.repo.GetThemeByKey(e.ctx, DefaultThemeKey)
+	if err != nil {
+		t.Fatalf("get default theme: %v", err)
+	}
+
+	if _, _, err := e.repo.InstallAtomically(e.ctx, e.storeA, theme.ID, otherVersion.ID, DefaultConfiguration); err == nil {
+		t.Fatal("expected mismatched theme/version install to fail")
+	}
+
+	after, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation after failed install: %v", err)
+	}
+	if after.ID != before.ID {
+		t.Fatalf("failed install replaced the active installation: %s -> %s", before.ID, after.ID)
+	}
+	var activeCount int
+	if err := e.pool.QueryRow(e.ctx, `SELECT count(*) FROM theme_installations WHERE store_id=$1 AND status='active'`, e.storeA).Scan(&activeCount); err != nil {
+		t.Fatalf("count active: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected exactly 1 active installation after rollback, got %d", activeCount)
+	}
+}
+
+// TestInstallationThemeVersionIntegrity proves the composite FK rejects an
+// installation whose theme_id and theme_version_id disagree.
+func TestInstallationThemeVersionIntegrity(t *testing.T) {
+	e := setupThemesTest(t)
+	themeA, err := e.repo.CreateTheme(e.ctx, "integrity-a", "Integrity A", "", ThemeTypeFree, ThemeStatusActive)
+	if err != nil {
+		t.Fatalf("create theme A: %v", err)
+	}
+	themeB, err := e.repo.CreateTheme(e.ctx, "integrity-b", "Integrity B", "", ThemeTypeFree, ThemeStatusActive)
+	if err != nil {
+		t.Fatalf("create theme B: %v", err)
+	}
+	versionB, err := e.repo.CreateThemeVersion(e.ctx, themeB.ID, "1.0.0", ThemeVersionStatusPublished, DefaultConfigurationSchema, DefaultConfiguration, "1.0.0")
+	if err != nil {
+		t.Fatalf("create version B: %v", err)
+	}
+	// theme A paired with a version owned by theme B must be rejected.
+	if _, err := e.repo.CreateInstallation(e.ctx, e.storeA, themeA.ID, versionB.ID, ThemeInstallationStatusActive); err == nil {
+		t.Fatal("expected composite FK violation for theme/version mismatch")
+	}
+	// The matching pair is accepted.
+	versionA, err := e.repo.CreateThemeVersion(e.ctx, themeA.ID, "1.0.0", ThemeVersionStatusPublished, DefaultConfigurationSchema, DefaultConfiguration, "1.0.0")
+	if err != nil {
+		t.Fatalf("create version A: %v", err)
+	}
+	if _, err := e.repo.CreateInstallation(e.ctx, e.storeA, themeA.ID, versionA.ID, ThemeInstallationStatusActive); err != nil {
+		t.Fatalf("expected matching theme/version to install: %v", err)
+	}
+}
+
+// TestReinstallPreviouslyUsedVersion covers A -> B -> A: a store must be able to
+// return to a theme version it used before. Installations are append-only
+// history, so the (store, version) pair is intentionally not unique.
+func TestReinstallPreviouslyUsedVersion(t *testing.T) {
+	e := setupThemesTest(t)
+	theme, err := e.repo.GetThemeByKey(e.ctx, DefaultThemeKey)
+	if err != nil {
+		t.Fatalf("get default theme: %v", err)
+	}
+	versionB, err := e.repo.CreateThemeVersion(e.ctx, theme.ID, "2.0.0", ThemeVersionStatusPublished, DefaultConfigurationSchema, DefaultConfiguration, "1.0.0")
+	if err != nil {
+		t.Fatalf("create v2: %v", err)
+	}
+
+	first, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, "")
+	if err != nil {
+		t.Fatalf("install A: %v", err)
+	}
+	second, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, "2.0.0")
+	if err != nil {
+		t.Fatalf("install B: %v", err)
+	}
+	if second.ThemeVersionID != versionB.ID {
+		t.Fatalf("expected B install to use version %s, got %s", versionB.ID, second.ThemeVersionID)
+	}
+	// Returning to A must succeed even though this store already used it.
+	third, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, "")
+	if err != nil {
+		t.Fatalf("reinstall A: %v", err)
+	}
+	if third.ThemeVersionID != first.ThemeVersionID {
+		t.Fatalf("expected reinstall to reuse version %s, got %s", first.ThemeVersionID, third.ThemeVersionID)
+	}
+	if third.ID == first.ID {
+		t.Fatal("expected reinstall to create a new installation row (history is append-only)")
+	}
+
+	var activeCount int
+	if err := e.pool.QueryRow(e.ctx, `SELECT count(*) FROM theme_installations WHERE store_id=$1 AND status='active'`, e.storeA).Scan(&activeCount); err != nil {
+		t.Fatalf("count active: %v", err)
+	}
+	if activeCount != 1 {
+		t.Fatalf("expected exactly 1 active installation after A->B->A, got %d", activeCount)
+	}
+	var totalCount int
+	if err := e.pool.QueryRow(e.ctx, `SELECT count(*) FROM theme_installations WHERE store_id=$1`, e.storeA).Scan(&totalCount); err != nil {
+		t.Fatalf("count total: %v", err)
+	}
+	if totalCount != 3 {
+		t.Fatalf("expected 3 historical installations, got %d", totalCount)
+	}
+	// History is preserved: the superseded A and B rows are inactive, not deleted.
+	for _, id := range []string{first.ID, second.ID} {
+		var status string
+		if err := e.pool.QueryRow(e.ctx, `SELECT status FROM theme_installations WHERE id=$1`, id).Scan(&status); err != nil {
+			t.Fatalf("read historical installation %s: %v", id, err)
+		}
+		if status != ThemeInstallationStatusInactive {
+			t.Fatalf("expected historical installation %s to be inactive, got %s", id, status)
+		}
+	}
+}
+
+// TestPublishRejectsStaleDraftRevision closes the TOCTOU window: a draft edited
+// after validation must not be published under the stale revision.
+func TestPublishRejectsStaleDraftRevision(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	inst, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation: %v", err)
+	}
+	cfg, err := e.repo.GetConfiguration(e.ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+	// Simulate a concurrent draft edit between validation and publish.
+	if _, err := e.repo.UpdateDraftConfiguration(e.ctx, inst.ID, map[string]any{"hero": map[string]any{"title": "Concurrent"}}); err != nil {
+		t.Fatalf("concurrent draft edit: %v", err)
+	}
+	if _, err := e.repo.PublishConfiguration(e.ctx, inst.ID, cfg.DraftRevision); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict for stale draft revision, got %v", err)
+	}
+	after, err := e.repo.GetConfiguration(e.ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("get config after: %v", err)
+	}
+	if after.PublishedRevision != cfg.PublishedRevision {
+		t.Fatalf("published revision must not advance on stale publish: %d -> %d", cfg.PublishedRevision, after.PublishedRevision)
+	}
+}
+
+// TestConcurrentPublishBumpsRevisionOnce ensures N concurrent publishes advance
+// the published revision exactly N times (no lost updates under the row lock).
+func TestConcurrentPublishBumpsRevisionOnce(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	inst, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation: %v", err)
+	}
+	cfg, err := e.repo.GetConfiguration(e.ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("get config: %v", err)
+	}
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := e.repo.PublishConfiguration(e.ctx, inst.ID, cfg.DraftRevision); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent publish failed: %v", err)
+	}
+
+	after, err := e.repo.GetConfiguration(e.ctx, inst.ID)
+	if err != nil {
+		t.Fatalf("get config after: %v", err)
+	}
+	if after.PublishedRevision != workers {
+		t.Fatalf("expected published revision %d after %d concurrent publishes, got %d", workers, workers, after.PublishedRevision)
+	}
+}
+
+// TestPreviewTokenRequiresConfiguredSecret proves preview fails closed instead of
+// issuing or accepting tokens signed with an empty key.
+func TestPreviewTokenRequiresConfiguredSecret(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	unconfigured := NewService(e.repo, commerce.NewRepository(e.pool.Pool), Options{})
+	if _, err := unconfigured.CreatePreviewToken(e.ctx, e.sellerA, e.storeA); !errors.Is(err, ErrPreviewNotConfigured) {
+		t.Fatalf("expected ErrPreviewNotConfigured, got %v", err)
+	}
+	// A token minted with a real secret must not verify when the secret is unset.
+	token, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if _, err := unconfigured.VerifyPreviewToken(token); !errors.Is(err, ErrPreviewNotConfigured) {
+		t.Fatalf("expected ErrPreviewNotConfigured on verify, got %v", err)
 	}
 }
 

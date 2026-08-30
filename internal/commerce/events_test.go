@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"dropshipping/packages/money"
+	"matjero/packages/money"
 )
 
 func TestNewProductUpsertedEvent(t *testing.T) {

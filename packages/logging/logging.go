@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"dropshipping/packages/config"
+	"matjero/packages/config"
 )
 
 func New(cfg config.Config) *slog.Logger {

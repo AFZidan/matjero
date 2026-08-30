@@ -288,6 +288,71 @@ func (r Repository) UpdateInstallationVersion(ctx context.Context, installationI
 	return translatePGError(err, "update installation version")
 }
 
+// InstallAtomically binds a store to a theme version in a single transaction: it
+// deactivates any currently active installation, inserts the new active
+// installation, and seeds its configuration from the version defaults.
+//
+// Atomicity matters because a switch is destructive to the live state: if the
+// configuration insert failed after the old installation had already been
+// deactivated, the store would be left with no active theme at all. Running all
+// three statements in one transaction means a failed switch rolls back to the
+// previous, still-active installation.
+func (r Repository) InstallAtomically(ctx context.Context, storeID, themeID, themeVersionID string, defaultConfig map[string]any) (ThemeInstallation, ThemeConfiguration, error) {
+	if storeID == "" || themeID == "" || themeVersionID == "" {
+		return ThemeInstallation{}, ThemeConfiguration{}, ErrInvalidInput
+	}
+	if defaultConfig == nil {
+		defaultConfig = map[string]any{}
+	}
+	defaultBytes, err := json.Marshal(defaultConfig)
+	if err != nil {
+		return ThemeInstallation{}, ThemeConfiguration{}, fmt.Errorf("marshal default configuration: %w", err)
+	}
+	var inst ThemeInstallation
+	var cfg ThemeConfiguration
+	err = r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE theme_installations SET status = 'inactive', updated_at = now()
+			WHERE store_id = $1 AND status = 'active'
+		`, storeID); err != nil {
+			return translatePGError(err, "deactivate installations")
+		}
+		instID := uuid.NewString()
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO theme_installations (id, store_id, theme_id, theme_version_id, status)
+			VALUES ($1, $2, $3, $4, 'active')
+			RETURNING installed_at, created_at, updated_at
+		`, instID, storeID, themeID, themeVersionID).Scan(&inst.InstalledAt, &inst.CreatedAt, &inst.UpdatedAt); err != nil {
+			return translatePGError(err, "create installation")
+		}
+		inst.ID = instID
+		inst.StoreID = storeID
+		inst.ThemeID = themeID
+		inst.ThemeVersionID = themeVersionID
+		inst.Status = ThemeInstallationStatusActive
+
+		cfgID := uuid.NewString()
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO theme_configurations (id, installation_id, draft_config, published_config)
+			VALUES ($1, $2, $3, $3)
+			RETURNING updated_at
+		`, cfgID, instID, defaultBytes).Scan(&cfg.UpdatedAt); err != nil {
+			return translatePGError(err, "create configuration")
+		}
+		cfg.ID = cfgID
+		cfg.InstallationID = instID
+		cfg.DraftConfig = defaultConfig
+		cfg.PublishedConfig = defaultConfig
+		cfg.DraftRevision = 0
+		cfg.PublishedRevision = 0
+		return nil
+	})
+	if err != nil {
+		return ThemeInstallation{}, ThemeConfiguration{}, err
+	}
+	return inst, cfg, nil
+}
+
 // --- Configurations ---
 
 func (r Repository) CreateConfiguration(ctx context.Context, installationID string, draft, published map[string]any) (ThemeConfiguration, error) {
@@ -352,16 +417,26 @@ func (r Repository) UpdateDraftConfiguration(ctx context.Context, installationID
 }
 
 // PublishConfiguration atomically copies the current draft into published and
-// bumps the published revision inside a single transaction. The row is locked
-// with FOR UPDATE so concurrent publishes cannot double-bump the revision.
-func (r Repository) PublishConfiguration(ctx context.Context, installationID string) (ThemeConfiguration, error) {
+// bumps the published revision inside a single transaction.
+//
+// expectedDraftRevision closes a time-of-check/time-of-use gap: the caller
+// validates the draft before publishing, but the draft can change in between.
+// The revision is re-read under a FOR UPDATE row lock and compared, so a draft
+// edited after validation is rejected with ErrConflict rather than publishing
+// content that was never validated. The same lock also prevents concurrent
+// publishes from double-bumping the revision.
+func (r Repository) PublishConfiguration(ctx context.Context, installationID string, expectedDraftRevision int) (ThemeConfiguration, error) {
 	var c ThemeConfiguration
 	var draftBytes, publishedBytes []byte
 	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var currentDraftRevision int
 		if err := tx.QueryRow(ctx, `
-			SELECT draft_config FROM theme_configurations WHERE installation_id = $1 FOR UPDATE
-		`, installationID).Scan(&draftBytes); err != nil {
+			SELECT draft_config, draft_revision FROM theme_configurations WHERE installation_id = $1 FOR UPDATE
+		`, installationID).Scan(&draftBytes, &currentDraftRevision); err != nil {
 			return translatePGError(err, "lock configuration")
+		}
+		if currentDraftRevision != expectedDraftRevision {
+			return fmt.Errorf("%w: draft changed since it was validated", ErrConflict)
 		}
 		now := time.Now()
 		return tx.QueryRow(ctx, `

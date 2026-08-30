@@ -102,6 +102,10 @@ func (s Service) GetInstallation(ctx context.Context, sellerID, storeID string) 
 // and published). If the store already has an active installation it is
 // deactivated (switching themes never mutates commerce data). When version is
 // empty the latest published version is used.
+//
+// The deactivate/insert/seed sequence runs in a single transaction, so a failed
+// switch rolls back and the store keeps its previous active theme instead of
+// being left with none.
 func (s Service) Install(ctx context.Context, sellerID, storeID, themeKey, version string) (ThemeInstallation, error) {
 	if err := s.authorizeStore(ctx, sellerID, storeID); err != nil {
 		return ThemeInstallation{}, err
@@ -125,14 +129,8 @@ func (s Service) Install(ctx context.Context, sellerID, storeID, themeKey, versi
 	if v.Status != ThemeVersionStatusPublished {
 		return ThemeInstallation{}, ErrInvalidInput
 	}
-	if err := s.repo.DeactivateInstallations(ctx, storeID); err != nil {
-		return ThemeInstallation{}, err
-	}
-	inst, err := s.repo.CreateInstallation(ctx, storeID, theme.ID, v.ID, ThemeInstallationStatusActive)
+	inst, _, err := s.repo.InstallAtomically(ctx, storeID, theme.ID, v.ID, v.DefaultConfiguration)
 	if err != nil {
-		return ThemeInstallation{}, err
-	}
-	if _, err := s.repo.CreateConfiguration(ctx, inst.ID, v.DefaultConfiguration, v.DefaultConfiguration); err != nil {
 		return ThemeInstallation{}, err
 	}
 	return inst, nil
@@ -203,7 +201,9 @@ func (s Service) PublishConfiguration(ctx context.Context, sellerID, storeID str
 	if err := RejectUnsafeContent(cfg.DraftConfig); err != nil {
 		return 0, err
 	}
-	published, err := s.repo.PublishConfiguration(ctx, inst.ID)
+	// Pass the validated revision so the repository can reject the publish if the
+	// draft changed between validation and write.
+	published, err := s.repo.PublishConfiguration(ctx, inst.ID, cfg.DraftRevision)
 	if err != nil {
 		return 0, err
 	}

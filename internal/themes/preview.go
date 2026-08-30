@@ -25,8 +25,10 @@ type PreviewClaims struct {
 // store installation draft. The signing secret is server-side configured and is
 // never embedded in the token.
 func (s Service) IssuePreviewToken(storeID, installationID string, draftRevision int) (string, error) {
+	// Fail closed: without a configured secret there is no way to sign a token
+	// that cannot be forged, so no token is issued at all.
 	if len(s.previewSecret) == 0 {
-		return "", errors.New("theme preview signing secret is not configured")
+		return "", ErrPreviewNotConfigured
 	}
 	claims := PreviewClaims{
 		StoreID:        storeID,
@@ -48,8 +50,10 @@ func (s Service) IssuePreviewToken(storeID, installationID string, draftRevision
 // requested context to ensure the token is not used for a different store.
 func (s Service) VerifyPreviewToken(token string) (PreviewClaims, error) {
 	var claims PreviewClaims
+	// Fail closed: an unconfigured secret must never be treated as a valid
+	// signing key, otherwise every token would verify against an empty HMAC.
 	if len(s.previewSecret) == 0 {
-		return claims, errors.New("theme preview signing secret is not configured")
+		return claims, ErrPreviewNotConfigured
 	}
 	parts := strings.Split(token, ".")
 	if len(parts) != 2 {
