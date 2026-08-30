@@ -21,10 +21,10 @@ docker-config:
 	docker compose config --quiet
 
 docker-build:
-	docker build -f docker/go-app.Dockerfile --build-arg APP_PATH=./apps/admin-api -t commerce-admin-api:phase0 .
-	docker build -f docker/go-app.Dockerfile --build-arg APP_PATH=./apps/workers/general-worker -t commerce-general-worker:phase0 .
-	docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/admin-web -t commerce-admin-web:phase0 .
-	docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/storefront-web -t commerce-storefront-web:phase0 .
+	docker build -f docker/go-app.Dockerfile --build-arg APP_PATH=./apps/admin-api -t commerce-admin-api:foundation .
+	docker build -f docker/go-app.Dockerfile --build-arg APP_PATH=./apps/workers/general-worker -t commerce-general-worker:foundation .
+	docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/admin-web -t commerce-admin-web:foundation .
+	docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/storefront-web -t commerce-storefront-web:foundation .
 
 migrate-check:
 	test -f migrations/000001_event_delivery_foundation.up.sql

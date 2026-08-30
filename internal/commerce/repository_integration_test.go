@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"dropshipping/packages/config"
+	"dropshipping/internal/testdb"
 	"dropshipping/packages/database"
 	"dropshipping/packages/money"
 )
@@ -21,11 +21,7 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := database.Connect(ctx, config.Config{DatabaseURL: dsn})
-	if err != nil {
-		t.Skipf("postgres unavailable: %v", err)
-	}
-	t.Cleanup(db.Close)
+	db := testdb.Open(t, dsn)
 
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_market_reference_data.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000003_commerce_domain_schema.up.sql"))

@@ -70,9 +70,9 @@ INSERT INTO country_translations (country_code, locale, name) VALUES
 ON CONFLICT (country_code, locale) DO NOTHING;
 
 INSERT INTO markets (code, country_code, currency_code, default_locale, timezone, status, configuration) VALUES
-    ('EG', 'EG', 'EGP', 'ar', 'Africa/Cairo', 'active', '{"phase":"phase1"}'),
-    ('SA', 'SA', 'SAR', 'ar', 'Asia/Riyadh', 'active', '{"phase":"phase1"}'),
-    ('AE', 'AE', 'AED', 'ar', 'Asia/Dubai', 'active', '{"phase":"phase1"}')
+    ('EG', 'EG', 'EGP', 'ar', 'Africa/Cairo', 'active', '{"release_track":"launch"}'),
+    ('SA', 'SA', 'SAR', 'ar', 'Asia/Riyadh', 'active', '{"release_track":"launch"}'),
+    ('AE', 'AE', 'AED', 'ar', 'Asia/Dubai', 'active', '{"release_track":"launch"}')
 ON CONFLICT (code) DO NOTHING;
 
 INSERT INTO market_locales (market_code, locale, is_default, is_enabled, sort_order) VALUES
