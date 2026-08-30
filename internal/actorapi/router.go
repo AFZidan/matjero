@@ -19,6 +19,7 @@ type Config struct {
 	Actor        string
 	RequireAuth  bool
 	AllowedRoles []string
+	Register    func(r chi.Router)
 }
 
 type MarketService interface {
@@ -52,6 +53,9 @@ func NewRouter(config Config, marketService MarketService, verifier auth.Verifie
 		r.Get("/bootstrap", server.handleBootstrap)
 		r.Get("/markets", server.handleMarkets)
 		r.Get("/markets/{code}", server.handleMarket)
+		if config.Register != nil {
+			config.Register(r)
+		}
 	})
 
 	return r

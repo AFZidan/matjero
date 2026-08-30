@@ -242,6 +242,7 @@ type SellerListingPrice struct {
 }
 
 type FulfillmentLocation struct {
+	SupplierID       string    `json:"supplier_id"`
 	ID               string    `json:"id"`
 	SupplierMarketID string    `json:"supplier_market_id"`
 	MarketCode       string    `json:"market_code"`
