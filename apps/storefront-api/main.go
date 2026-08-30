@@ -4,7 +4,10 @@ import (
 	"context"
 	"log"
 
+	"dropshipping/internal/actorapi"
+	"dropshipping/internal/markets"
 	"dropshipping/packages/config"
+	"dropshipping/packages/database"
 	"dropshipping/packages/httpx"
 	"dropshipping/packages/logging"
 	"dropshipping/packages/observability"
@@ -28,7 +31,25 @@ func run(ctx context.Context) error {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
+	db, err := database.Connect(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	marketService := markets.NewService(markets.NewRepository(db.Pool))
 	appCfg := httpx.ConfigFrom(cfg)
-	router := httpx.NewRouter(httpx.App{Config: appCfg, Logger: logger})
+	router := httpx.NewRouter(httpx.App{
+		Config: appCfg,
+		Logger: logger,
+		Ready: func(ctx context.Context) error {
+			return db.Ping(ctx)
+		},
+	})
+	router.Mount("/", actorapi.NewRouter(actorapi.Config{
+		AppName:     "Storefront API",
+		Actor:       "storefront",
+		RequireAuth: false,
+	}, marketService, nil))
 	return httpx.Run(ctx, appCfg, logger, router)
 }

@@ -15,6 +15,7 @@ type Config struct {
 	RedisAddr       string
 	RabbitMQURL     string
 	ZitadelIssuer   string
+	ZitadelAudience string
 	ShutdownTimeout time.Duration
 }
 
@@ -36,6 +37,7 @@ func Load(serviceName string) (Config, error) {
 		RedisAddr:       stringEnv("REDIS_ADDR", "localhost:6379"),
 		RabbitMQURL:     stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
 		ZitadelIssuer:   stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
+		ZitadelAudience: stringEnv("ZITADEL_AUDIENCE", serviceName),
 		ShutdownTimeout: time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }

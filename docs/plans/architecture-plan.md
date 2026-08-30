@@ -31,6 +31,20 @@ Postponed intentionally:
 - Kubernetes, service mesh, sharding, distributed SQL, CQRS, and event sourcing.
 - Commerce features such as products, orders, checkout, payments, shipping, settlements, and integrations.
 
+## Phase 1 Decisions Finalized
+
+Phase 1 adds the identity, localization, and markets foundation without expanding into commerce workflows:
+
+- ZITADEL is the OIDC issuer for actor-facing APIs.
+- Actor APIs validate JWTs via OIDC discovery and JWKS, bind principals into request context, and apply coarse role gates at the transport boundary.
+- Platform admin, seller, and supplier roles are distinct and intentionally coarse at this layer.
+- Resource authorization remains a separate concern above the authentication boundary.
+- Locale negotiation prefers an explicit `locale` query parameter, then `Accept-Language`, then English.
+- Responses emit language and direction headers so frontend shells can stay consistent across SSR, API bootstrap, and browser navigation.
+- Markets are first-class reference data with countries, currencies, market locales, and localized country names.
+- Initial market seed coverage is Egypt, Saudi Arabia, and the United Arab Emirates.
+- Market additions remain migration- and data-driven rather than codegen-driven.
+
 ## System Context
 
 ```mermaid

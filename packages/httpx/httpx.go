@@ -50,7 +50,7 @@ func ConfigFrom(cfg config.Config) Config {
 	}
 }
 
-func NewRouter(app App) http.Handler {
+func NewRouter(app App) chi.Router {
 	if app.Ready == nil {
 		app.Ready = func(context.Context) error { return nil }
 	}
@@ -96,7 +96,7 @@ func Run(ctx context.Context, cfg Config, logger *slog.Logger, handler http.Hand
 
 func healthHandler(cfg Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{
+		WriteJSON(w, http.StatusOK, map[string]string{
 			"status":  "ok",
 			"service": cfg.ServiceName,
 		})
@@ -106,11 +106,11 @@ func healthHandler(cfg Config) http.HandlerFunc {
 func readyHandler(cfg Config, ready func(context.Context) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := ready(r.Context()); err != nil {
-			writeError(w, http.StatusServiceUnavailable, "not_ready", err.Error())
+			WriteError(w, http.StatusServiceUnavailable, "not_ready", err.Error())
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]string{
+		WriteJSON(w, http.StatusOK, map[string]string{
 			"status":  "ready",
 			"service": cfg.ServiceName,
 		})
@@ -161,7 +161,7 @@ func recoverMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 							slog.String("stack", string(debug.Stack())),
 						)
 					}
-					writeError(w, http.StatusInternalServerError, "internal_error", "internal server error")
+					WriteError(w, http.StatusInternalServerError, "internal_error", "internal server error")
 				}
 			}()
 
@@ -170,14 +170,14 @@ func recoverMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) {
+func WriteJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]any{
+func WriteError(w http.ResponseWriter, status int, code, message string) {
+	WriteJSON(w, status, map[string]any{
 		"error": map[string]string{
 			"code":    code,
 			"message": message,

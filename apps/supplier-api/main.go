@@ -4,7 +4,11 @@ import (
 	"context"
 	"log"
 
+	"dropshipping/internal/actorapi"
+	"dropshipping/internal/markets"
+	"dropshipping/packages/auth"
 	"dropshipping/packages/config"
+	"dropshipping/packages/database"
 	"dropshipping/packages/httpx"
 	"dropshipping/packages/logging"
 	"dropshipping/packages/observability"
@@ -28,7 +32,35 @@ func run(ctx context.Context) error {
 	}
 	defer func() { _ = shutdown(context.Background()) }()
 
+	db, err := database.Connect(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+
+	verifier, err := auth.NewOIDCVerifier(ctx, auth.Config{
+		IssuerURL:  cfg.ZitadelIssuer,
+		Audience:   cfg.ZitadelAudience,
+		RolesClaim: auth.DefaultRolesClaim(),
+	})
+	if err != nil {
+		return err
+	}
+
+	marketService := markets.NewService(markets.NewRepository(db.Pool))
 	appCfg := httpx.ConfigFrom(cfg)
-	router := httpx.NewRouter(httpx.App{Config: appCfg, Logger: logger})
+	router := httpx.NewRouter(httpx.App{
+		Config: appCfg,
+		Logger: logger,
+		Ready: func(ctx context.Context) error {
+			return db.Ping(ctx)
+		},
+	})
+	router.Mount("/", actorapi.NewRouter(actorapi.Config{
+		AppName:      "Supplier API",
+		Actor:        "supplier",
+		RequireAuth:  true,
+		AllowedRoles: []string{auth.RoleSupplierOwner, auth.RoleSupplierManager, auth.RoleSupplierStaff},
+	}, marketService, verifier))
 	return httpx.Run(ctx, appCfg, logger, router)
 }

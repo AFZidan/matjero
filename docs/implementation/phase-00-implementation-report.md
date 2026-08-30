@@ -135,7 +135,7 @@ All executed checks passed.
 
 ## Known Issues
 
-- The repository is not initialized as a git repository, so no commit was created.
+- The phase 0 report was written before the repository state was finalized; the repository is initialized and remote-linked.
 - Full infrastructure integration tests are not yet a separate automated suite.
 - No commerce-domain behavior exists yet by design.
 

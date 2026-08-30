@@ -18,6 +18,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddr != ":8080" {
 		t.Fatalf("HTTPAddr = %q", cfg.HTTPAddr)
 	}
+	if cfg.ZitadelAudience != "admin-api" {
+		t.Fatalf("ZitadelAudience = %q", cfg.ZitadelAudience)
+	}
 }
 
 func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
