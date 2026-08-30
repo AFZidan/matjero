@@ -65,7 +65,7 @@ func run(ctx context.Context) error {
 		Actor:        "seller",
 		RequireAuth:  true,
 		AllowedRoles: []string{auth.RoleSellerOwner, auth.RoleSellerManager, auth.RoleSellerStaff},
-		Register: platformapi.RegisterSellerRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
+		Register:     platformapi.RegisterSellerRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
 	}, marketService, verifier))
 	return httpx.Run(ctx, appCfg, logger, router)
 }

@@ -66,7 +66,7 @@ func run(ctx context.Context) error {
 		Actor:        "admin",
 		RequireAuth:  true,
 		AllowedRoles: []string{auth.RolePlatformAdmin},
-		Register: platformapi.RegisterAdminRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
+		Register:     platformapi.RegisterAdminRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
 	}, marketService, verifier))
 	return httpx.Run(ctx, appCfg, logger, router)
 }
