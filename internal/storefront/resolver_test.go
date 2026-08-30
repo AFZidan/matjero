@@ -1,4 +1,5 @@
 package storefront
+package storefront
 
 import (
 	"context"
