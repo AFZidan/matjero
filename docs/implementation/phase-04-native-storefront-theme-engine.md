@@ -495,15 +495,23 @@ Phase 4 is complete only when all completion criteria are met.
 - **Dependencies**: P4.1.
 - **Branch**: `feature/p4-theme-engine`
 - **Backend Work**:
-  - Migration `000006_theme_engine_schema.{up,down}.sql`: `themes`, `theme_versions` (immutable after publication), `theme_assets`, `theme_configuration_schemas`, `theme_installations` (one active per store, DB-enforced), `theme_configurations` (draft + published, validated JSONB, revision counter), theme type/license fields.
-  - New `internal/themes` package: `models.go`, `repository.go`, `service.go`, `theme_version.go`, `theme_installation.go`, `configuration.go` (JSON-Schema validation, limits, unsafe HTML/script rejection), draft/preview/publish/discard workflow, version compatibility + upgrade policy, signed preview-token issuance.
-  - Seed the one built-in theme + version 1 + configuration schema.
-  - Seller-api endpoints: list themes, get store installation/config, install/select, update draft, preview token, publish, discard/reset, version/upgrade info — all ownership-checked.
+  - Migration `000007_theme_engine_schema.{up,down}.sql` (P4.1 consumed `000005`/`000006`): tables `themes`, `theme_versions`, `theme_installations`, `theme_configurations`, `theme_assets`.
+    - `themes`: `key` UNIQUE, `type` (`free`/`premium`), `status` (`draft`/`active`/`deprecated`/`disabled`).
+    - `theme_versions`: immutable after publication; `UNIQUE(theme_id, version)`; `configuration_schema` + `default_configuration` stored as JSONB on the version (no separate schema table); `status` (`draft`/`published`/`deprecated`); `published_at`/`deprecated_at`.
+    - `theme_installations`: binds `store_id` → `theme_version_id`; partial unique index `theme_installations_one_active_per_store` enforces **one active installation per store** at the DB level; `status` (`active`/`inactive`).
+    - `theme_configurations`: `draft_config` + `published_config` JSONB, `draft_revision`/`published_revision` (both `>= 0` check), `UNIQUE(installation_id)`.
+    - `theme_assets`: metadata only (uri/integrity/metadata); binaries served via CDN/object storage later.
+  - New `internal/themes` package (responsibility-based files, no phase prefixes): `theme.go`, `version.go`, `installation.go`, `configuration.go`, `asset.go`, `errors.go`, `repository.go`, `service.go`, `validator.go`, `preview.go`, `seed.go`.
+    - `validator.go`: JSON-Schema (draft 2020-12) validation via `santhosh-tekuri/jsonschema/v6` + recursive unsafe-content rejection (`<script>`, `javascript:`, `on*=` handlers, `<iframe>`/`<object>`/`<embed>`/`<style>`, `expression(`). Seller customization is structured data only — no raw HTML/CSS/JS editor.
+    - `service.go`: install (default config init, switching deactivates prior active install), draft update (schema + safety validated), atomic publish (validate → copy draft→published → bump `published_revision` in one tx), discard/reset, version upgrade (validates current draft against target schema, rejects incompatible), resource-level authorization via `StoreLookup` (seller may only manage own stores).
+    - `preview.go`: HMAC-SHA256 signed, store-scoped, short-lived preview token (`store_id`, `installation_id`, `draft_revision`, `exp`); secret from `config.ThemePreviewSecret` (never hardcoded); tamper/forge/expiry resistant; caller compares `store_id`/`installation_id` to prevent cross-store use.
+    - `seed.go`: idempotent `SeedBuiltInThemes` creates the built-in `matjero-default` FREE theme + published `1.0.0` version (default schema + default config guaranteed compatible). Safe to run on every startup.
+  - Seller-api endpoints (all ownership-checked, tags `Themes` / `Theme Configuration`): `GET /v1/seller/themes`, `GET /v1/seller/themes/{key}/versions`, `GET /v1/seller/stores/{store_id}/theme`, `POST /v1/seller/stores/{store_id}/theme/install`, `GET|PUT /v1/seller/stores/{store_id}/theme/draft`, `POST /v1/seller/stores/{store_id}/theme/publish`, `POST /v1/seller/stores/{store_id}/theme/discard`, `POST /v1/seller/stores/{store_id}/theme/upgrade`, `POST /v1/seller/stores/{store_id}/theme/preview`.
 - **Frontend Work**: None.
-- **Database Changes**: `000006_theme_engine_schema.{up,down}.sql`.
-- **API/OpenAPI Changes**: Seller API endpoints (Themes, Theme Configuration tags); regenerate `docs/api/seller/openapi.json`.
-- **Tests**: Theme creation/version rules, installation, configuration validation, draft/publish, version compatibility, authorization (seller A cannot access seller B's installation/draft).
-- **Acceptance Criteria**: All theme domain tests pass; seller authorization enforced; OpenAPI spec regenerated and in sync.
+- **Database Changes**: `000007_theme_engine_schema.{up,down}.sql`.
+- **API/OpenAPI Changes**: Seller API endpoints (Themes, Theme Configuration tags); regenerate `docs/api/seller/openapi.json` via `go run ./cmd/openapi-gen`.
+- **Tests**: `theme_test.go` (type/status rules, schema validation, unsafe-content rejection, default-config compatibility); `repository_integration_test.go` (persistence, version uniqueness, one active installation per store, config persistence, publish copies draft + bumps revision, failed publish leaves published untouched, FK constraints, install/switch/upgrade, cross-store authorization, preview-token lifecycle, migration up/down/reapply).
+- **Acceptance Criteria**: All theme domain + integration tests pass; seller authorization enforced; OpenAPI spec regenerated and in sync; `go vet/build/test`, `npm` lint/typecheck/test/build, `docker compose config`, `make migrate-check` green.
 
 ### P4.3 — Public Catalog
 - **Goal**: Store-scoped public catalog read model.

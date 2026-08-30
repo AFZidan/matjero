@@ -4,11 +4,14 @@ import (
 	"context"
 	"log"
 
+	"github.com/go-chi/chi/v5"
+
 	"dropshipping/internal/actorapi"
 	"dropshipping/internal/commerce"
 	"dropshipping/internal/markets"
 	"dropshipping/internal/openapi"
 	"dropshipping/internal/platformapi"
+	"dropshipping/internal/themes"
 	"dropshipping/packages/auth"
 	"dropshipping/packages/config"
 	"dropshipping/packages/database"
@@ -55,6 +58,9 @@ func run(ctx context.Context) error {
 	service.PlatformDomain = cfg.PlatformDomain
 	service.ReservedSubdomains = cfg.ReservedSubdomains
 	marketService := markets.NewService(markets.NewRepository(db.Pool))
+	themeService := themes.NewService(themes.NewRepository(db.Pool), repo, themes.Options{
+		PreviewSecret: []byte(cfg.ThemePreviewSecret),
+	})
 	appCfg := httpx.ConfigFrom(cfg)
 	router := httpx.NewRouter(httpx.App{
 		Config: appCfg,
@@ -82,7 +88,10 @@ func run(ctx context.Context) error {
 		Actor:        "seller",
 		RequireAuth:  true,
 		AllowedRoles: []string{auth.RoleSellerOwner, auth.RoleSellerManager, auth.RoleSellerStaff},
-		Register:     platformapi.RegisterSellerRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
+		Register: func(r chi.Router) {
+			platformapi.RegisterSellerRoutes(platformapi.Dependencies{Commerce: service, Repo: repo})(r)
+			platformapi.RegisterSellerThemeRoutes(platformapi.ThemeDependencies{Themes: themeService, Commerce: service})(r)
+		},
 	}, marketService, verifier))
 	return httpx.Run(ctx, appCfg, logger, router)
 }
