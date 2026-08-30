@@ -26,6 +26,8 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_market_reference_data.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000003_commerce_domain_schema.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000004_admin_supplier_seller_platforms.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000005_store_domain_lifecycle.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000006_store_domain_integrity.up.sql"))
 
 	repo := NewRepository(db.Pool)
 	service := NewService(repo)
@@ -59,7 +61,7 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateStore returned error: %v", err)
 	}
-	if _, err := repo.CreateStoreDomain(ctx, store.ID, "example-"+suffix+".eg", "active", true, nil); err != nil {
+	if _, err := repo.CreateStoreDomain(ctx, store.ID, "example-"+suffix+".eg", "platform", "active", true, nil, nil); err != nil {
 		t.Fatalf("CreateStoreDomain returned error: %v", err)
 	}
 
@@ -159,7 +161,7 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	}
 
 	var verifiedAt = time.Now().UTC()
-	_, err = repo.CreateStoreDomain(ctx, store.ID, "store-"+suffix+".example.eg", "active", false, &verifiedAt)
+	_, err = repo.CreateStoreDomain(ctx, store.ID, "store-"+suffix+".example.eg", "platform", "active", false, &verifiedAt, nil)
 	if err != nil {
 		t.Fatalf("CreateStoreDomain verified returned error: %v", err)
 	}

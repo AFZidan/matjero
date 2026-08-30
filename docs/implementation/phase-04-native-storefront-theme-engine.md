@@ -79,7 +79,7 @@ Public Catalog
 - For public storefront traffic, tenant identity is derived **exclusively** from a trusted domain-to-store mapping.
 - Client-supplied `store_id` / `seller_id` is **never** trusted on public routes when the request host already determines the tenant.
 - The `X-Storefront-Host` header convention (already seeded in `web/storefront/src/lib/api.ts`) is the carrier for the original host through the Next.js → storefront-api hop.
-- Unknown, inactive, unverified, or disabled domain mappings fail safely to a Store Not Found page (no moderation details leaked).
+- Unknown, inactive, pending, verified (not-yet-active), or disabled domain mappings fail safely to a Store Not Found page (no moderation details leaked). Only `active` domain mappings resolve publicly.
 
 ### 4.3 Subdomain Support
 
@@ -90,9 +90,9 @@ Public Catalog
 
 ### 4.4 Custom Domain Foundation
 
-- Custom domains map to a Store with lifecycle states: `PENDING`, `VERIFIED`, `FAILED`, `DISABLED`.
-- Verification: DNS TXT token check (seller adds domain → PENDING with token → check endpoint performs public DNS TXT lookup → VERIFIED → activation). No DNS-provider integrations.
-- Only verified + active custom domains resolve publicly.
+- Custom domains map to a Store with lifecycle states: `PENDING`, `VERIFIED`, `FAILED`, `DISABLED`, `ACTIVE`.
+- Verification: DNS TXT token check (seller adds domain → PENDING with token → check endpoint performs public DNS TXT lookup → VERIFIED → activation → ACTIVE). No DNS-provider integrations.
+- **`VERIFIED` is NOT `ACTIVE`.** A domain that has passed ownership verification but has not yet been activated must NOT resolve publicly. Only `ACTIVE` domains (platform or custom) resolve. `PENDING`, `VERIFIED`, `FAILED`, and `DISABLED` all fail safe.
 - Application-level domain mapping/resolution foundation only.
 
 ### 4.5 Theme Domain Model
@@ -478,13 +478,15 @@ Phase 4 is complete only when all completion criteria are met.
 - **Branch**: `feature/p4-store-resolution`
 - **Backend Work**:
   - Migration `000005_store_domain_lifecycle.{up,down}.sql`: evolve `store_domains` with lifecycle CHECK (PENDING/VERIFIED/ACTIVE/FAILED/DISABLED), `verification_token`, `domain_type` (platform/custom), `last_checked_at`; reserved-subdomain support.
+  - Migration `000006_store_domain_integrity.{up,down}.sql`: enforce canonical lowercase domain uniqueness via a case-insensitive unique index on `lower(domain)` (replacing the original case-sensitive `UNIQUE(domain)` constraint and the redundant `store_domains_domain_idx`); defensive normalization of existing rows.
   - New `internal/storefront` package: `domain_resolver.go`, `store_resolver.go` — trusted host extraction (lowercase, port strip, forwarded-host only behind trusted-proxy config), PG lookup with fail-safe handling.
   - `packages/config`: platform domain + trusted proxy settings.
-  - Platform subdomain auto-allocation at store creation.
+  - **Atomic store + platform subdomain creation**: `CreateStoreWithDomain` creates the store, its settings, and its primary platform domain in a single PostgreSQL transaction (rollback on any failure). Reserved-subdomain validation runs before any database write.
+  - Canonicalization: `commerce.NormalizeDomain` is the single shared normalization routine used at both the write boundary (repository) and the read boundary (storefront resolver).
   - Repository read methods in `internal/commerce/platform_repository.go`.
 - **Frontend Work**: None.
 - **Database Changes**: `000005_store_domain_lifecycle.{up,down}.sql`.
-- **API/OpenAPI Changes**: None (internal package).
+- **API/OpenAPI Changes**: None (internal package).pending/verified/disabled domains fail safe; VERIFIED != ACTIVE enforced; canonical lowercase persistence; case-insensitive duplicate rejection; atomic store+domain creation rolls back on conflict; one-primary-domain-per-store invariant
 - **Tests**: `resolver_test.go`, `tenant_isolation_test.go` (valid subdomain, custom domain, inactive, duplicate, unknown, normalized host, dev host with port, spoofed forwarded host).
 - **Acceptance Criteria**: All resolver tests pass; unknown/inactive/unverified domains fail safe.
 
@@ -579,7 +581,7 @@ Phase 4 is complete only when all completion criteria are met.
 - **Backend Work**:
   - Seller-api: request custom domain (PENDING + verification token), check verification (public DNS TXT lookup → VERIFIED/FAILED), list own domains; activation rules.
   - Admin-api: list domains across stores, disable/re-enable, moderation view.
-  - Resolver integration: only verified + active domains resolve publicly.
+  - Resolver integration: only ACTIVE domains resolve publicly (VERIFIED is not routable).
 - **Frontend Work**: Seller domain management UI (part of P4.7 or separate).
 - **Database Changes**: `verification_token`, `domain_type`, `last_checked_at` columns (part of 000005).
 - **API/OpenAPI Changes**: Seller + Admin domain endpoints; regenerate specs.

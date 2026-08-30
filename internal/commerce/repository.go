@@ -2,6 +2,8 @@ package commerce
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,57 +202,159 @@ func (r Repository) CreateStore(ctx context.Context, sellerID, marketCode, code,
 
 	var created Store
 	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		id := uuid.NewString()
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO stores (id, seller_id, market_code, code, name, status)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING created_at, updated_at
-		`, id, sellerID, marketCode, code, name, status).Scan(&created.CreatedAt, &created.UpdatedAt); err != nil {
-			return translatePGError(err, "create store")
-		}
-
-		if err := upsertJSONSettings(ctx, tx, `
-			INSERT INTO store_settings (store_id, settings)
-			VALUES ($1, $2)
-			ON CONFLICT (store_id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
-		`, id, settings); err != nil {
+		s, err := createStoreInTx(ctx, tx, sellerID, marketCode, code, name, status, settings)
+		if err != nil {
 			return err
 		}
-
-		created = Store{
-			ID:         id,
-			SellerID:   sellerID,
-			MarketCode: marketCode,
-			Code:       code,
-			Name:       name,
-			Status:     status,
-			CreatedAt:  created.CreatedAt,
-			UpdatedAt:  created.UpdatedAt,
-		}
+		created = s
 		return nil
 	})
 	return created, err
 }
 
-func (r Repository) CreateStoreDomain(ctx context.Context, storeID, domain, status string, isPrimary bool, verifiedAt *time.Time) (StoreDomain, error) {
-	if storeID == "" || domain == "" || status == "" {
+// createStoreInTx inserts a store row and its settings within the provided
+// transaction. It is the single store-creation primitive reused by both
+// CreateStore and the atomic CreateStoreWithDomain.
+func createStoreInTx(ctx context.Context, tx pgx.Tx, sellerID, marketCode, code, name, status string, settings map[string]any) (Store, error) {
+	id := uuid.NewString()
+	var created Store
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO stores (id, seller_id, market_code, code, name, status)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING created_at, updated_at
+	`, id, sellerID, marketCode, code, name, status).Scan(&created.CreatedAt, &created.UpdatedAt); err != nil {
+		return Store{}, translatePGError(err, "create store")
+	}
+
+	if err := upsertJSONSettings(ctx, tx, `
+		INSERT INTO store_settings (store_id, settings)
+		VALUES ($1, $2)
+		ON CONFLICT (store_id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
+	`, id, settings); err != nil {
+		return Store{}, err
+	}
+
+	created.ID = id
+	created.SellerID = sellerID
+	created.MarketCode = marketCode
+	created.Code = code
+	created.Name = name
+	created.Status = status
+	return created, nil
+}
+
+// CreateStoreDomain persists a store domain using the shared canonicalization
+// routine and returns the fully populated persisted record (including database
+// defaults such as domain_type and lifecycle timestamps).
+func (r Repository) CreateStoreDomain(ctx context.Context, storeID, domain, domainType, status string, isPrimary bool, verifiedAt *time.Time, verificationToken *string) (StoreDomain, error) {
+	normalized, err := NormalizeDomain(domain)
+	if err != nil {
+		return StoreDomain{}, ErrInvalidInput
+	}
+	if storeID == "" || status == "" {
 		return StoreDomain{}, ErrInvalidInput
 	}
 
 	var created StoreDomain
-	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		id := uuid.NewString()
-		if err := tx.QueryRow(ctx, `
-			INSERT INTO store_domains (id, store_id, domain, is_primary, verified_at, status)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING created_at, updated_at
-		`, id, storeID, domain, isPrimary, verifiedAt, status).Scan(&created.CreatedAt, &created.UpdatedAt); err != nil {
-			return translatePGError(err, "create store domain")
+	err = r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		d, err := createStoreDomainInTx(ctx, tx, storeID, normalized, domainType, status, isPrimary, verifiedAt, verificationToken)
+		if err != nil {
+			return err
 		}
-		created = StoreDomain{ID: id, StoreID: storeID, Domain: domain, IsPrimary: isPrimary, VerifiedAt: verifiedAt, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
+		created = d
 		return nil
 	})
 	return created, err
+}
+
+// createStoreDomainInTx inserts a store_domains row within the provided
+// transaction and scans the complete persisted row (all lifecycle columns).
+func createStoreDomainInTx(ctx context.Context, tx pgx.Tx, storeID, domain, domainType, status string, isPrimary bool, verifiedAt *time.Time, verificationToken *string) (StoreDomain, error) {
+	id := uuid.NewString()
+	var d StoreDomain
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO store_domains (id, store_id, domain, is_primary, verified_at, status, domain_type, verification_token, last_checked_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL)
+		RETURNING id, store_id, domain, is_primary, verified_at, status, domain_type, verification_token, last_checked_at, created_at, updated_at
+	`, id, storeID, domain, isPrimary, verifiedAt, status, domainType, verificationToken).Scan(
+		&d.ID, &d.StoreID, &d.Domain, &d.IsPrimary, &d.VerifiedAt, &d.Status, &d.DomainType, &d.VerificationToken, &d.LastCheckedAt, &d.CreatedAt, &d.UpdatedAt,
+	); err != nil {
+		return StoreDomain{}, translatePGError(err, "create store domain")
+	}
+	return d, nil
+}
+
+// CreateStoreWithDomain atomically creates a store, its settings, and its primary
+// platform domain within a single PostgreSQL transaction. If any step fails the
+// entire operation rolls back, leaving no partial Store, StoreSettings, or
+// StoreDomain state. This is the cohesive transaction boundary used when a store
+// is created together with its platform-generated subdomain.
+func (r Repository) CreateStoreWithDomain(ctx context.Context, sellerID, marketCode, code, name, status string, settings map[string]any, domain, domainType, domainStatus string, isPrimary bool, verifiedAt *time.Time, verificationToken *string) (Store, StoreDomain, error) {
+	if sellerID == "" || marketCode == "" || code == "" || name == "" || status == "" || domain == "" || domainStatus == "" {
+		return Store{}, StoreDomain{}, ErrInvalidInput
+	}
+	normalizedDomain, err := NormalizeDomain(domain)
+	if err != nil {
+		return Store{}, StoreDomain{}, ErrInvalidInput
+	}
+
+	var store Store
+	var storeDomain StoreDomain
+	err = r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		s, err := createStoreInTx(ctx, tx, sellerID, marketCode, code, name, status, settings)
+		if err != nil {
+			return err
+		}
+		store = s
+
+		d, err := createStoreDomainInTx(ctx, tx, store.ID, normalizedDomain, domainType, domainStatus, isPrimary, verifiedAt, verificationToken)
+		if err != nil {
+			return err
+		}
+		storeDomain = d
+		return nil
+	})
+	return store, storeDomain, err
+}
+
+// CreateCustomStoreDomain persists a seller-supplied custom domain in the
+// PENDING lifecycle state with a cryptographically secure verification token.
+// The domain is canonicalized before persistence. Ownership verification
+// (promoting PENDING -> VERIFIED -> ACTIVE) is handled by later lifecycle steps.
+func (r Repository) CreateCustomStoreDomain(ctx context.Context, storeID, domain string) (StoreDomain, error) {
+	if storeID == "" || domain == "" {
+		return StoreDomain{}, ErrInvalidInput
+	}
+	normalized, err := NormalizeDomain(domain)
+	if err != nil {
+		return StoreDomain{}, ErrInvalidInput
+	}
+	token, err := generateVerificationToken()
+	if err != nil {
+		return StoreDomain{}, fmt.Errorf("generate verification token: %w", err)
+	}
+
+	var created StoreDomain
+	err = r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		d, err := createStoreDomainInTx(ctx, tx, storeID, normalized, "custom", "pending", false, nil, &token)
+		if err != nil {
+			return err
+		}
+		created = d
+		return nil
+	})
+	return created, err
+}
+
+// generateVerificationToken returns a cryptographically secure, URL-safe token
+// suitable for DNS ownership verification. It is not derived from any predictable
+// identifier.
+func generateVerificationToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (r Repository) CreateProduct(ctx context.Context, slug, status string) (Product, error) {

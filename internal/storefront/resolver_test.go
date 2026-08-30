@@ -1,5 +1,4 @@
 package storefront
-package storefront
 
 import (
 	"context"
@@ -92,10 +91,9 @@ func TestDomainFromRequest(t *testing.T) {
 
 func TestStoreResolverResolve(t *testing.T) {
 	lookup := fakeLookup{byDomain: map[string]commerce.StoreDomainResolution{
-		"store-a.matjero.com":  storeResolution("store-a", "store-a.matjero.com", "active", "active"),
-		"store-b.matjero.com":  storeResolution("store-b", "store-b.matjero.com", "active", "active"),
-		"pending.matjero.com":  storeResolution("store-c", "pending.matjero.com", "active", "pending"),
-		"inactive.matjero.com": storeResolution("store-d", "inactive.matjero.com", "inactive", "active"),
+		"store-a.matjero.com": storeResolution("store-a", "store-a.matjero.com", "active", "active"),
+		"store-b.matjero.com": storeResolution("store-b", "store-b.matjero.com", "active", "active"),
+		"pending.matjero.com": storeResolution("store-c", "pending.matjero.com", "active", "pending"), "verified.matjero.com": storeResolution("store-f", "verified.matjero.com", "active", "verified"), "inactive.matjero.com": storeResolution("store-d", "inactive.matjero.com", "inactive", "active"),
 		"disabled.matjero.com": storeResolution("store-e", "disabled.matjero.com", "active", "disabled"),
 	}}
 	resolver := NewStoreResolver(lookup)
@@ -135,6 +133,14 @@ func TestStoreResolverResolve(t *testing.T) {
 
 	t.Run("disabled domain fails safe", func(t *testing.T) {
 		if _, err := resolver.Resolve(ctx, "disabled.matjero.com"); err != ErrDomainInactive {
+			t.Errorf("got %v, want ErrDomainInactive", err)
+		}
+	})
+
+	t.Run("verified-but-not-active domain fails safe", func(t *testing.T) {
+		// VERIFIED is a distinct lifecycle state from ACTIVE: a verified domain is
+		// not yet routable. Only ACTIVE domains resolve publicly.
+		if _, err := resolver.Resolve(ctx, "verified.matjero.com"); err != ErrDomainInactive {
 			t.Errorf("got %v, want ErrDomainInactive", err)
 		}
 	})

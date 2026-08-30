@@ -4,19 +4,27 @@ import (
 	"net/http"
 	"strings"
 
+	"dropshipping/internal/commerce"
 	"dropshipping/packages/config"
 )
 
-// NormalizeHost lowercases a host and strips any port and surrounding whitespace.
-// It is the single normalization routine used for both request hosts and stored
-// domain mappings so comparisons are stable and case-insensitive.
+// NormalizeHost lowercases a host and strips any port and surrounding whitespace,
+// then canonicalizes it through the shared commerce.NormalizeDomain routine so the
+// read boundary (request host) and the write boundary (persisted domain) use one
+// normalization function. It is the single normalization routine used for both
+// request hosts and stored domain mappings so comparisons are stable and
+// case-insensitive.
 func NormalizeHost(host string) string {
 	host = strings.TrimSpace(host)
 	host = strings.ToLower(host)
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
-	return host
+	domain, err := commerce.NormalizeDomain(host)
+	if err != nil {
+		return ""
+	}
+	return domain
 }
 
 // DomainFromRequest extracts the trusted storefront domain from an HTTP request.
