@@ -223,6 +223,7 @@ The phase introduces a new migration chain after the Phase 1 market reference ta
 
 - Products, stores, suppliers, categories, attributes, variants, SKUs, supplier offers, and seller listings must have stable IDs and clear searchable/filterable fields.
 - Product, category, store, and supplier translations must remain normalized so future multilingual indexing can build Arabic and English documents without schema redesign.
+- Arabic and English search must remain free to use independent analyzers and normalization rules later.
 - Category and attribute modeling must support future faceted filtering.
 - Market, availability, pricing, status, supplier, store, category, and attribute data must be projectable into search documents.
 - Aggregate `updated_at` values and/or version fields must be available for incremental indexing.
@@ -231,6 +232,7 @@ The phase introduces a new migration chain after the Phase 1 market reference ta
 - No business write operation may depend on the search index being available.
 - Initial search may use PostgreSQL where appropriate.
 - A future Search Indexer should be able to consume domain events and build dedicated Product, Store, and Supplier indexes.
+- The future indexer must be able to project market, availability, pricing, status, supplier, store, category, and attribute data into search documents.
 - Do not add a `search-api` microservice in Phase 2.
 
 ## Application Services
