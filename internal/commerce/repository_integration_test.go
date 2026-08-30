@@ -27,8 +27,8 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	}
 	t.Cleanup(db.Close)
 
-	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_phase1_identity_localization_markets.up.sql"))
-	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000003_phase2_commerce_domain_foundation.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_market_reference_data.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000003_commerce_domain_schema.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000004_admin_supplier_seller_platforms.up.sql"))
 
 	repo := NewRepository(db.Pool)
