@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	ServiceName     string
-	Environment     string
-	HTTPAddr        string
-	DatabaseURL     string
-	RedisAddr       string
-	RabbitMQURL     string
-	ZitadelIssuer   string
-	ZitadelAudience string
-	ShutdownTimeout time.Duration
+	ServiceName        string
+	Environment        string
+	HTTPAddr           string
+	DatabaseURL        string
+	RedisAddr          string
+	RabbitMQURL        string
+	ZitadelIssuer      string
+	ZitadelAudience    string
+	OpenAPIDocsEnabled bool
+	ShutdownTimeout    time.Duration
 }
 
 func Load(serviceName string) (Config, error) {
@@ -30,15 +31,16 @@ func Load(serviceName string) (Config, error) {
 	}
 
 	return Config{
-		ServiceName:     serviceName,
-		Environment:     stringEnv("APP_ENV", "development"),
-		HTTPAddr:        stringEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:     stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
-		RedisAddr:       stringEnv("REDIS_ADDR", "localhost:6379"),
-		RabbitMQURL:     stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
-		ZitadelIssuer:   stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
-		ZitadelAudience: stringEnv("ZITADEL_AUDIENCE", serviceName),
-		ShutdownTimeout: time.Duration(timeoutSeconds) * time.Second,
+		ServiceName:        serviceName,
+		Environment:        stringEnv("APP_ENV", "development"),
+		HTTPAddr:           stringEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:        stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
+		RedisAddr:          stringEnv("REDIS_ADDR", "localhost:6379"),
+		RabbitMQURL:        stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
+		ZitadelIssuer:      stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
+		ZitadelAudience:    stringEnv("ZITADEL_AUDIENCE", serviceName),
+		OpenAPIDocsEnabled: boolEnv("OPENAPI_DOCS_ENABLED", stringEnv("APP_ENV", "development") != "production"),
+		ShutdownTimeout:    time.Duration(timeoutSeconds) * time.Second,
 	}, nil
 }
 
@@ -65,4 +67,17 @@ func intEnv(key string, fallback int) (int, error) {
 	}
 
 	return parsed, nil
+}
+
+func boolEnv(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

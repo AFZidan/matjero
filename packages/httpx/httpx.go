@@ -177,10 +177,10 @@ func WriteJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func WriteError(w http.ResponseWriter, status int, code, message string) {
-	WriteJSON(w, status, map[string]any{
-		"error": map[string]string{
-			"code":    code,
-			"message": message,
+	WriteJSON(w, status, ErrorResponse{
+		Error: ErrorDetail{
+			Code:    code,
+			Message: message,
 		},
 	})
 }
