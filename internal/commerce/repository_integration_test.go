@@ -29,6 +29,7 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_phase1_identity_localization_markets.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000003_phase2_commerce_domain_foundation.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000004_admin_supplier_seller_platforms.up.sql"))
 
 	repo := NewRepository(db.Pool)
 	service := NewService(repo)
@@ -70,11 +71,18 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateProduct returned error: %v", err)
 	}
+	category, err := repo.CreateCategory(ctx, "home-care-"+suffix, nil, "active")
+	if err != nil {
+		t.Fatalf("CreateCategory returned error: %v", err)
+	}
 	if err := repo.UpsertProductTranslation(ctx, ProductTranslation{ProductID: product.ID, Locale: "ar", Name: "منظف", Description: "منظف متعدد الاستخدامات"}); err != nil {
 		t.Fatalf("UpsertProductTranslation ar returned error: %v", err)
 	}
 	if err := repo.UpsertProductTranslation(ctx, ProductTranslation{ProductID: product.ID, Locale: "en", Name: "Detergent", Description: "Multi-purpose detergent"}); err != nil {
 		t.Fatalf("UpsertProductTranslation en returned error: %v", err)
+	}
+	if err := repo.SetProductCategories(ctx, product.ID, []string{category.ID}); err != nil {
+		t.Fatalf("SetProductCategories returned error: %v", err)
 	}
 
 	var translationCount int
@@ -83,6 +91,28 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	}
 	if translationCount != 2 {
 		t.Fatalf("expected 2 translations, got %d", translationCount)
+	}
+	var categoryCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM product_categories WHERE product_id = $1`, product.ID).Scan(&categoryCount); err != nil {
+		t.Fatalf("count product categories: %v", err)
+	}
+	if categoryCount != 1 {
+		t.Fatalf("expected 1 product category, got %d", categoryCount)
+	}
+
+	resolvedSupplier, err := service.ResolveSupplierIDForSubject(ctx, "user-1-"+suffix)
+	if err != nil {
+		t.Fatalf("ResolveSupplierIDForSubject returned error: %v", err)
+	}
+	if resolvedSupplier != supplier.ID {
+		t.Fatalf("resolved supplier id = %q", resolvedSupplier)
+	}
+	resolvedSeller, err := service.ResolveSellerIDForSubject(ctx, "user-2-"+suffix)
+	if err != nil {
+		t.Fatalf("ResolveSellerIDForSubject returned error: %v", err)
+	}
+	if resolvedSeller != seller.ID {
+		t.Fatalf("resolved seller id = %q", resolvedSeller)
 	}
 
 	supplierProduct, err := repo.CreateSupplierProduct(ctx, supplier.ID, product.ID, "SUP-"+suffix, "active")
@@ -103,6 +133,17 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	availableQty := int64(7)
 	if _, err := repo.SetSupplierOfferAvailability(ctx, supplierOfferEG.ID, true, &availableQty); err != nil {
 		t.Fatalf("SetSupplierOfferAvailability returned error: %v", err)
+	}
+
+	catalogItems, err := repo.ListSupplierCatalog(ctx, SupplierCatalogFilter{MarketCode: "EG", SupplierID: supplier.ID, Locale: "en", Page: Page{Limit: 10}})
+	if err != nil {
+		t.Fatalf("ListSupplierCatalog returned error: %v", err)
+	}
+	if len(catalogItems) != 1 {
+		t.Fatalf("expected 1 catalog item, got %d", len(catalogItems))
+	}
+	if catalogItems[0].CategoryID != category.ID {
+		t.Fatalf("catalog category id = %q", catalogItems[0].CategoryID)
 	}
 
 	listing, err := service.CreateSellerListing(ctx, store.ID, product.ID, &supplierOfferEG.ID, "EG", "active")
@@ -175,6 +216,24 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	}
 	if updatedSnapshot.ReservedQty != 2 {
 		t.Fatalf("reserved qty changed after failed reserve: %d", updatedSnapshot.ReservedQty)
+	}
+
+	updatedSnapshot, movement, err := repo.AdjustInventory(ctx, snapshot.ID, 1, "adjust", "receive stock", "user-1-"+suffix, "corr-"+suffix, "cause-"+suffix)
+	if err != nil {
+		t.Fatalf("AdjustInventory returned error: %v", err)
+	}
+	if updatedSnapshot.OnHandQty != 4 {
+		t.Fatalf("on hand qty after adjustment = %d", updatedSnapshot.OnHandQty)
+	}
+	var movementCount int
+	if err := db.Pool.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapshot.ID).Scan(&movementCount); err != nil {
+		t.Fatalf("count inventory movements: %v", err)
+	}
+	if movementCount != 1 {
+		t.Fatalf("expected 1 inventory movement, got %d", movementCount)
+	}
+	if movement.MovementType != "adjust" {
+		t.Fatalf("movement type = %q", movement.MovementType)
 	}
 }
 

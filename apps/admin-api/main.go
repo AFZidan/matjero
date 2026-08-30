@@ -5,7 +5,9 @@ import (
 	"log"
 
 	"dropshipping/internal/actorapi"
+	"dropshipping/internal/commerce"
 	"dropshipping/internal/markets"
+	"dropshipping/internal/platformapi"
 	"dropshipping/packages/auth"
 	"dropshipping/packages/config"
 	"dropshipping/packages/database"
@@ -48,6 +50,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	repo := commerce.NewRepository(db.Pool)
+	service := commerce.NewService(repo)
 	marketService := markets.NewService(markets.NewRepository(db.Pool))
 	appCfg := httpx.ConfigFrom(cfg)
 	router := httpx.NewRouter(httpx.App{
@@ -62,6 +66,7 @@ func run(ctx context.Context) error {
 		Actor:        "admin",
 		RequireAuth:  true,
 		AllowedRoles: []string{auth.RolePlatformAdmin},
+		Register: platformapi.RegisterAdminRoutes(platformapi.Dependencies{Commerce: service, Repo: repo}),
 	}, marketService, verifier))
 	return httpx.Run(ctx, appCfg, logger, router)
 }

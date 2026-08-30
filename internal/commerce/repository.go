@@ -23,6 +23,10 @@ func NewRepository(pool *pgxpool.Pool) Repository {
 	return Repository{pool: pool}
 }
 
+func (r Repository) Pool() *pgxpool.Pool {
+	return r.pool
+}
+
 func (r Repository) withTx(ctx context.Context, fn func(context.Context, pgx.Tx) error) error {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -601,7 +605,7 @@ func (r Repository) CreateFulfillmentLocation(ctx context.Context, supplierID, s
 		`, id, supplierID, supplierMarketID, marketCode, code, name, locationType, status).Scan(&created.CreatedAt, &created.UpdatedAt); err != nil {
 			return translatePGError(err, "create fulfillment location")
 		}
-		created = FulfillmentLocation{ID: id, SupplierMarketID: supplierMarketID, MarketCode: marketCode, Code: code, Name: name, LocationType: locationType, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
+		created = FulfillmentLocation{ID: id, SupplierID: supplierID, SupplierMarketID: supplierMarketID, MarketCode: marketCode, Code: code, Name: name, LocationType: locationType, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
 		return nil
 	})
 	return created, err
