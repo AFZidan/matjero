@@ -24,7 +24,7 @@ func TestRepositoryReadsSeededMarkets(t *testing.T) {
 	}
 	t.Cleanup(db.Close)
 
-	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_phase1_identity_localization_markets.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_market_reference_data.up.sql"))
 
 	repo := NewRepository(db.Pool)
 

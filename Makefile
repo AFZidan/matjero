@@ -27,5 +27,5 @@ docker-build:
 	docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/storefront-web -t commerce-storefront-web:phase0 .
 
 migrate-check:
-	test -f migrations/000001_phase0_foundation.up.sql
-	test -f migrations/000001_phase0_foundation.down.sql
+	test -f migrations/000001_event_delivery_foundation.up.sql
+	test -f migrations/000001_event_delivery_foundation.down.sql
