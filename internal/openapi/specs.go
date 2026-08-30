@@ -5,10 +5,10 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"dropshipping/internal/api"
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/markets"
-	"dropshipping/packages/httpx"
+	"matjero/internal/api"
+	"matjero/internal/commerce"
+	"matjero/internal/markets"
+	"matjero/packages/httpx"
 )
 
 func BuildAdminSpec() (*openapi3.T, error) {
@@ -538,6 +538,108 @@ func sellerRoutes() []RouteSpec {
 			Parameters:  []ParameterSpec{pathStringParam("id", "Seller listing identifier")},
 			RequestBody: StatusUpdateRequest{},
 			Responses:   authOKResponses("Seller listing status updated", StatusResponse{}),
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/v1/seller/themes",
+			OperationID: "listThemes",
+			Summary:     "List available themes",
+			Tags:        []string{"Themes"},
+			Auth:        true,
+			Responses:   authReadResponses("Theme collection", ThemeCollectionResponse{}),
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/v1/seller/themes/{key}/versions",
+			OperationID: "listThemeVersions",
+			Summary:     "List versions for a theme",
+			Tags:        []string{"Themes"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("key", "Theme key")},
+			Responses:   authReadResponses("Theme version collection", ThemeVersionCollectionResponse{}),
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/v1/seller/stores/{store_id}/theme",
+			OperationID: "getStoreTheme",
+			Summary:     "Get the active theme installation and configuration for a store",
+			Tags:        []string{"Themes", "Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			Responses:   authReadResponses("Theme installation", ThemeInstallationResponse{}),
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/v1/seller/stores/{store_id}/theme/install",
+			OperationID: "installStoreTheme",
+			Summary:     "Install or select a theme for a store",
+			Tags:        []string{"Themes"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			RequestBody: ThemeInstallRequest{},
+			Responses:   authCreatedResponses("Theme installed", ThemeInstallationResponse{}),
+		},
+		{
+			Method:      http.MethodGet,
+			Path:        "/v1/seller/stores/{store_id}/theme/draft",
+			OperationID: "getStoreThemeDraft",
+			Summary:     "Get the draft theme configuration for a store",
+			Tags:        []string{"Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			Responses:   authReadResponses("Draft configuration", ThemeDraftResponse{}),
+		},
+		{
+			Method:      http.MethodPut,
+			Path:        "/v1/seller/stores/{store_id}/theme/draft",
+			OperationID: "updateStoreThemeDraft",
+			Summary:     "Update the draft theme configuration for a store",
+			Tags:        []string{"Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			RequestBody: ThemeConfigRequest{},
+			Responses:   authOKResponses("Draft configuration updated", ThemeDraftResponse{}),
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/v1/seller/stores/{store_id}/theme/publish",
+			OperationID: "publishStoreTheme",
+			Summary:     "Publish the draft theme configuration for a store",
+			Tags:        []string{"Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			Responses:   authOKResponses("Theme published", ThemePublishResponse{}),
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/v1/seller/stores/{store_id}/theme/discard",
+			OperationID: "discardStoreThemeDraft",
+			Summary:     "Discard the draft and reset it to the published configuration",
+			Tags:        []string{"Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			Responses:   authOKResponses("Draft discarded", ThemeDraftResponse{}),
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/v1/seller/stores/{store_id}/theme/upgrade",
+			OperationID: "upgradeStoreTheme",
+			Summary:     "Upgrade a store's theme installation to a newer published version",
+			Tags:        []string{"Themes"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			RequestBody: ThemeUpgradeRequest{},
+			Responses:   authOKResponses("Theme upgraded", StatusResponse{}),
+		},
+		{
+			Method:      http.MethodPost,
+			Path:        "/v1/seller/stores/{store_id}/theme/preview",
+			OperationID: "createStoreThemePreview",
+			Summary:     "Issue a short-lived, signed, store-scoped preview token for the draft",
+			Tags:        []string{"Theme Configuration"},
+			Auth:        true,
+			Parameters:  []ParameterSpec{pathStringParam("store_id", "Store identifier")},
+			Responses:   authOKResponses("Preview token issued", ThemePreviewResponse{}),
 		},
 	}
 }

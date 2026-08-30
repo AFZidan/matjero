@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/internal/testdb"
-	"dropshipping/packages/database"
+	"matjero/internal/commerce"
+	"matjero/internal/testdb"
+	"matjero/packages/database"
 )
 
 func applySQLFileStorefront(t *testing.T, db *database.Pool, path string) {

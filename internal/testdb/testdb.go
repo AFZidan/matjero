@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"dropshipping/packages/database"
+	"matjero/packages/database"
 )
 
 var nonIdentifier = regexp.MustCompile(`[^a-z0-9_]+`)
@@ -38,9 +38,17 @@ func Open(t testing.TB, dsn string) *database.Pool {
 		t.Fatalf("create isolated schema %s: %v", schema, err)
 	}
 
+	// CREATE EXTENSION IF NOT EXISTS is not safe under concurrent execution
+	// across parallel test packages that share one database: two callers can
+	// both observe the extension as absent and race to insert it, and one fails
+	// with a duplicate-key violation on pg_extension_name_index. Tolerate that
+	// race by proceeding when the extension is present after the attempt.
 	if _, err := adminPool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS pgcrypto`); err != nil {
-		adminPool.Close()
-		t.Fatalf("ensure pgcrypto extension: %v", err)
+		var exists bool
+		if qErr := adminPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pgcrypto')`).Scan(&exists); qErr != nil || !exists {
+			adminPool.Close()
+			t.Fatalf("ensure pgcrypto extension: %v", err)
+		}
 	}
 
 	var pool *pgxpool.Pool

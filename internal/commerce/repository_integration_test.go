@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"dropshipping/internal/testdb"
-	"dropshipping/packages/database"
-	"dropshipping/packages/money"
+	"matjero/internal/testdb"
+	"matjero/packages/database"
+	"matjero/packages/money"
 )
 
 func TestRepositoryCommerceFoundations(t *testing.T) {

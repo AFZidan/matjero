@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"dropshipping/packages/events"
+	"matjero/packages/events"
 )
 
 type Store struct{}

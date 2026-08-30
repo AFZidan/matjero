@@ -31,6 +31,10 @@ type Config struct {
 	// ReservedSubdomains are subdomain labels that sellers may not claim as a
 	// store code (e.g. www, api, admin).
 	ReservedSubdomains []string
+	// ThemePreviewSecret is the server-side HMAC signing key for short-lived,
+	// store-scoped theme draft preview tokens. It must be configuration-driven
+	// and is never hardcoded in application code.
+	ThemePreviewSecret string
 }
 
 func Load(serviceName string) (Config, error) {
@@ -57,6 +61,7 @@ func Load(serviceName string) (Config, error) {
 		PlatformDomain:       stringEnv("PLATFORM_DOMAIN", "matjero.com"),
 		TrustedForwardedHost: boolEnv("TRUSTED_FORWARDED_HOST", false),
 		ReservedSubdomains:   stringSliceEnv("RESERVED_SUBDOMAINS", []string{"www", "api", "admin", "app", "cdn", "mail", "seller", "supplier", "static", "assets"}),
+		ThemePreviewSecret:   stringEnv("THEME_PREVIEW_SECRET", ""),
 	}, nil
 }
 

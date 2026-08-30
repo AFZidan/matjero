@@ -9,11 +9,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"dropshipping/internal/commerce"
-	"dropshipping/packages/auth"
-	"dropshipping/packages/httpx"
-	"dropshipping/packages/i18n"
-	"dropshipping/packages/money"
+	"matjero/internal/commerce"
+	"matjero/packages/auth"
+	"matjero/packages/httpx"
+	"matjero/packages/i18n"
+	"matjero/packages/money"
 )
 
 type Dependencies struct {

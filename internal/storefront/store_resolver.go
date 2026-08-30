@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 
-	"dropshipping/internal/commerce"
+	"matjero/internal/commerce"
 )
 
 // ResolvedStore is the tenant context derived from a trusted storefront domain.

@@ -1,6 +1,6 @@
 package openapi
 
-import "dropshipping/internal/platformapi"
+import "matjero/internal/platformapi"
 
 type CollectionResponse[T any] = platformapi.CollectionResponse[T]
 type StatusResponse = platformapi.StatusResponse
@@ -23,3 +23,13 @@ type SellerStoreCreateRequest = platformapi.SellerStoreCreateRequest
 type SellerListingImportRequest = platformapi.SellerListingImportRequest
 type SellerListingPriceRequest = platformapi.SellerListingPriceRequest
 type StatusUpdateRequest = platformapi.StatusUpdateRequest
+
+type ThemeCollectionResponse = platformapi.ThemeCollectionResponse
+type ThemeVersionCollectionResponse = platformapi.ThemeVersionCollectionResponse
+type ThemeInstallationResponse = platformapi.ThemeInstallationResponse
+type ThemeDraftResponse = platformapi.ThemeDraftResponse
+type ThemePublishResponse = platformapi.ThemePublishResponse
+type ThemePreviewResponse = platformapi.ThemePreviewResponse
+type ThemeConfigRequest = platformapi.ThemeConfigRequest
+type ThemeInstallRequest = platformapi.ThemeInstallRequest
+type ThemeUpgradeRequest = platformapi.ThemeUpgradeRequest

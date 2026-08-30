@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"dropshipping/packages/config"
-	"dropshipping/packages/logging"
-	"dropshipping/packages/observability"
+	"matjero/packages/config"
+	"matjero/packages/logging"
+	"matjero/packages/observability"
 )
 
 func main() {

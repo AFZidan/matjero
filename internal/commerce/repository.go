@@ -14,7 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"dropshipping/packages/money"
+	"matjero/packages/money"
 )
 
 type Repository struct {
@@ -832,6 +832,21 @@ func (r Repository) GetStore(ctx context.Context, storeID string) (Store, error)
 		return Store{}, translatePGError(err, "get store")
 	}
 	return store, nil
+}
+
+// StoreSellerID resolves the owning seller of a store. It satisfies the
+// themes.StoreLookup interface so the Theme Engine can enforce resource-level
+// authorization without importing commerce internals.
+func (r Repository) StoreSellerID(ctx context.Context, storeID string) (string, error) {
+	if storeID == "" {
+		return "", ErrInvalidInput
+	}
+	var sellerID string
+	err := r.pool.QueryRow(ctx, `SELECT seller_id FROM stores WHERE id = $1`, storeID).Scan(&sellerID)
+	if err != nil {
+		return "", translatePGError(err, "store seller")
+	}
+	return sellerID, nil
 }
 
 func (r Repository) GetSupplierOffer(ctx context.Context, offerID string) (SupplierOffer, error) {

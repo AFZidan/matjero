@@ -3,7 +3,7 @@ package markets
 import (
 	"encoding/json"
 
-	"dropshipping/packages/i18n"
+	"matjero/packages/i18n"
 )
 
 type Country struct {

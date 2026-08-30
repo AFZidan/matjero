@@ -3,7 +3,7 @@ package markets
 import (
 	"context"
 
-	"dropshipping/packages/i18n"
+	"matjero/packages/i18n"
 )
 
 type Service struct {

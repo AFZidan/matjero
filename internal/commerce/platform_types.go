@@ -3,7 +3,7 @@ package commerce
 import (
 	"time"
 
-	"dropshipping/packages/money"
+	"matjero/packages/money"
 )
 
 type Page struct {
@@ -57,7 +57,7 @@ type SupplierLocationSummary struct {
 
 type InventoryMovement struct {
 	ID                  string    `json:"id"`
-	InventorySnapshotID  string    `json:"inventory_snapshot_id"`
+	InventorySnapshotID string    `json:"inventory_snapshot_id"`
 	MovementType        string    `json:"movement_type"`
 	QuantityDelta       int64     `json:"quantity_delta"`
 	OnHandQty           int64     `json:"on_hand_qty"`

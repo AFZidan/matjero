@@ -4,14 +4,14 @@ import (
 	"context"
 	"log"
 
-	"dropshipping/internal/actorapi"
-	"dropshipping/internal/markets"
-	"dropshipping/internal/openapi"
-	"dropshipping/packages/config"
-	"dropshipping/packages/database"
-	"dropshipping/packages/httpx"
-	"dropshipping/packages/logging"
-	"dropshipping/packages/observability"
+	"matjero/internal/actorapi"
+	"matjero/internal/markets"
+	"matjero/internal/openapi"
+	"matjero/packages/config"
+	"matjero/packages/database"
+	"matjero/packages/httpx"
+	"matjero/packages/logging"
+	"matjero/packages/observability"
 )
 
 func main() {

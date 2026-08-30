@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"dropshipping/internal/testdb"
-	"dropshipping/packages/database"
+	"matjero/internal/testdb"
+	"matjero/packages/database"
 )
 
 func applyStoreDomainMigrations(t *testing.T, db *database.Pool) {
