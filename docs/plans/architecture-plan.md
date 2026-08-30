@@ -24,6 +24,7 @@ Prepared now, implemented later:
 - Storefront tenant resolution contract.
 - Theme safety model.
 - Strong inventory reservation strategy.
+- Search-ready derived read model contracts for product, store, supplier, category, attribute, variant, SKU, offer, and listing discovery.
 
 Postponed intentionally:
 
@@ -271,6 +272,7 @@ sequenceDiagram
 - Fulfillment Location is a first-class domain concept.
 - Store Market equals Seller Listing Market equals Supplier Offer Market and must be enforced in domain logic and database constraints.
 - Money never uses floating point. Monetary values use deterministic minor-unit or explicit decimal representation.
+- Search is a derived read model. PostgreSQL remains the source of truth, and no business write may depend on search availability.
 - Order items preserve immutable commercial snapshots.
 - Financial truth eventually uses an immutable double-entry ledger.
 - External integration state is eventually consistent and reconciled.
