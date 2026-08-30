@@ -126,6 +126,6 @@ func sampleMarket() markets.Market {
 			MinorUnit: 2,
 			Status:    "active",
 		},
-		Configuration: map[string]any{"phase": "phase1"},
+		Configuration: map[string]any{"release_track": "launch"},
 	}
 }

@@ -39,8 +39,8 @@ jobs:
       - run: docker build -f docker/go-app.Dockerfile --build-arg APP_PATH=./apps/workers/general-worker -t commerce-general-worker:ci .
       - run: docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/admin-web -t commerce-admin-web:ci .
       - run: docker build -f docker/web-app.Dockerfile --build-arg WORKSPACE=@commerce/storefront-web -t commerce-storefront-web:ci .
-      - run: test -f migrations/000001_phase0_foundation.up.sql
-      - run: test -f migrations/000001_phase0_foundation.down.sql
+      - run: test -f migrations/000001_event_delivery_foundation.up.sql
+      - run: test -f migrations/000001_event_delivery_foundation.down.sql
 
   security:
     runs-on: ubuntu-latest

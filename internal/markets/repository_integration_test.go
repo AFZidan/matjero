@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"dropshipping/packages/config"
+	"dropshipping/internal/testdb"
 	"dropshipping/packages/database"
 	"dropshipping/packages/i18n"
 )
@@ -18,11 +18,7 @@ func TestRepositoryReadsSeededMarkets(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	db, err := database.Connect(ctx, config.Config{DatabaseURL: dsn})
-	if err != nil {
-		t.Skipf("postgres unavailable: %v", err)
-	}
-	t.Cleanup(db.Close)
+	db := testdb.Open(t, dsn)
 
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000002_market_reference_data.up.sql"))
 
