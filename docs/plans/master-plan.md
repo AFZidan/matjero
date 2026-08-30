@@ -1,0 +1,3600 @@
+# Distributed Commerce Platform
+
+# Master Architecture & Implementation Plan
+
+## 1. Purpose
+
+Build a scalable distributed commerce platform connecting:
+
+* Suppliers and brands
+* Sellers
+* Native seller stores
+* External seller stores
+* End customers
+* Shipping providers
+* Payment providers
+* External e-commerce platforms
+* Future marketplace consumers
+
+The platform should allow sellers to:
+
+1. Create a native online store.
+2. Connect an existing external store.
+3. Browse supplier products available within their market.
+4. Sell supplier products without owning stock.
+5. Sell their own inventory alongside supplier products.
+6. Configure pricing independently.
+7. Process customer orders.
+8. Use integrated shipping and payment providers.
+9. Track order lifecycle, returns, balances, and settlements.
+10. Benefit later from marketplace exposure, reputation, product intelligence, protected catalog access, and microbrand capabilities.
+
+The platform must be designed from the beginning for:
+
+* Arabic and English.
+* RTL and LTR.
+* Multiple countries and markets.
+* Multiple currencies.
+* Multiple seller stores.
+* Multiple supplier operations.
+* Multiple storefront themes.
+* Independent external integrations.
+* Event-driven processing.
+* Horizontal scalability.
+* Strong financial and inventory correctness.
+
+The implementation must still remain evolutionary and avoid unnecessary infrastructure complexity before real demand exists.
+
+---
+
+# 2. Fundamental Engineering Principle
+
+The system should follow:
+
+```text
+Correct Domain Model
+        ↓
+Reliable Transactions
+        ↓
+Strong Data Integrity
+        ↓
+Clear Service Boundaries
+        ↓
+Operational Reliability
+        ↓
+Measured Scaling
+```
+
+Scalability readiness must not become an excuse for premature complexity.
+
+Design for future scale.
+
+Deploy only what is currently justified.
+
+---
+
+# 3. Implementation Strategy
+
+The project must be implemented through ordered phases.
+
+A dependent phase must not begin until its required foundation is stable.
+
+Primary dependency chain:
+
+```text
+Engineering Foundation
+        ↓
+Identity + Localization + Markets
+        ↓
+Commerce Domain Foundation
+        ↓
+Admin / Supplier / Seller Platforms
+        ↓
+Native Storefront + Themes
+        ↓
+Checkout + Orders + Inventory
+        ↓
+Shipping
+        ↓
+Payments
+        ↓
+Financial Ledger + Settlements
+        ↓
+External Integration Foundation
+        ↓
+Supplier Integrations
+        ↓
+Seller Integrations
+        ↓
+Public Integration API
+        ↓
+Marketplace
+        ↓
+Reputation + Intelligence
+        ↓
+Protected Commerce
+        ↓
+Microbrand
+        ↓
+Additional Markets
+        ↓
+Advanced Scale
+```
+
+Parallel work is allowed only when there are no unresolved dependencies.
+
+---
+
+# 4. Core Technology Stack
+
+## Backend
+
+Primary backend language:
+
+# Go / Golang
+
+Go must be used for:
+
+* Backend APIs
+* Commerce application services
+* Workers
+* Schedulers
+* Integration applications
+* Webhook processors
+* Event consumers
+* Internal background services
+
+---
+
+## Frontend
+
+### Management Applications
+
+Use:
+
+# React.js
+
+For:
+
+```text
+Admin Dashboard
+Seller Dashboard
+Supplier Dashboard
+```
+
+### Seller Storefront
+
+Use:
+
+# Next.js
+
+Because the storefront requires:
+
+* SSR
+* SEO
+* Dynamic domains
+* Dynamic stores
+* Theme rendering
+* CDN integration
+* Server-side metadata
+* Product indexing
+* Sitemap generation
+* Social previews
+* High-performance caching
+* Future static generation where appropriate
+
+---
+
+# 5. Infrastructure Stack
+
+Target architecture:
+
+```text
+PostgreSQL
+Redis
+RabbitMQ
+Kafka
+ZITADEL
+Object Storage
+CDN
+```
+
+However:
+
+## MVP Operational Stack
+
+The initial production deployment should prioritize:
+
+```text
+PostgreSQL
+Redis
+RabbitMQ
+Transactional Outbox
+ZITADEL
+Object Storage
+CDN
+```
+
+Kafka should not be an operational dependency for the earliest MVP unless actual requirements justify it.
+
+The system must still define event contracts in a Kafka-compatible manner from the beginning.
+
+---
+
+# 6. PostgreSQL
+
+PostgreSQL is the authoritative source of truth for:
+
+* Markets
+* Sellers
+* Suppliers
+* Stores
+* Catalog
+* Supplier offers
+* Listings
+* Inventory
+* Reservations
+* Orders
+* Payments
+* Shipments
+* Returns
+* Financial journal
+* Settlements
+* Payouts
+
+Do not split the initial platform into separate databases unnecessarily.
+
+Use one PostgreSQL cluster initially with clear logical module ownership.
+
+Separate databases may be introduced later only when operational evidence justifies them.
+
+---
+
+# 7. Redis
+
+Redis is a performance and coordination layer.
+
+Allowed uses:
+
+* Cache
+* Rate limits
+* Sessions where required
+* Short-lived idempotency state
+* Short-lived locks
+* Store resolution cache
+* Storefront cache
+* Temporary integration state
+* Request throttling
+
+Redis must not be authoritative for:
+
+* Inventory
+* Orders
+* Money
+* Payments
+* Settlements
+* Seller balances
+* Supplier balances
+
+Loss of Redis must not corrupt transactional business state.
+
+---
+
+# 8. RabbitMQ
+
+RabbitMQ is primarily for asynchronous commands and work queues.
+
+Examples:
+
+```text
+integration.product.pull
+integration.product.push
+
+integration.inventory.pull
+integration.inventory.push
+
+integration.order.import
+integration.order.export
+
+shipping.create
+shipping.cancel
+
+payment.process
+
+notification.send
+
+webhook.process
+
+reconciliation.run
+```
+
+RabbitMQ responsibilities include:
+
+* Async jobs
+* Commands
+* Retries
+* Work distribution
+* Rate-controlled processing
+* Provider-specific workers
+
+Must support:
+
+* Retry policy
+* Dead-letter queues
+* Poison-message handling
+* Retry count
+* Correlation IDs
+* Idempotent consumers
+* Observability
+
+---
+
+# 9. Kafka
+
+Kafka represents the long-term domain-event backbone.
+
+Examples:
+
+```text
+ProductCreated
+ProductUpdated
+SupplierOfferChanged
+InventoryChanged
+OrderCreated
+OrderConfirmed
+OrderCancelled
+ShipmentCreated
+ShipmentDelivered
+PaymentCaptured
+RefundCompleted
+SettlementCompleted
+```
+
+Kafka should be introduced when requirements justify:
+
+* Many independent consumers.
+* Event replay.
+* High-volume event fan-out.
+* Search indexing.
+* Analytics pipelines.
+* Data warehouse feeds.
+* Large integration ecosystems.
+* Derived read models.
+
+Do not introduce Kafka merely because the future architecture includes it.
+
+---
+
+# 10. ZITADEL Identity Architecture
+
+ZITADEL is the centralized identity provider.
+
+It handles:
+
+* Authentication
+* OIDC
+* OAuth2
+* MFA
+* Service accounts
+* Identity lifecycle
+* Coarse roles
+
+Used by:
+
+```text
+Admin Web
+Seller Web
+Supplier Web
+```
+
+Initial coarse roles:
+
+```text
+platform_admin
+
+seller_owner
+seller_manager
+seller_staff
+
+supplier_owner
+supplier_manager
+supplier_staff
+```
+
+ZITADEL does not replace resource-level authorization.
+
+Example:
+
+```text
+ZITADEL:
+user = seller_manager
+
+Platform:
+user belongs to Seller #100
+user may access Store #200
+user may not access Store #300
+```
+
+Resource ownership remains platform-controlled.
+
+---
+
+# 11. Main Application Boundaries
+
+## Backend APIs
+
+Independent deployments:
+
+```text
+admin-api
+seller-api
+supplier-api
+storefront-api
+```
+
+These are separate external application boundaries.
+
+They may scale and deploy independently.
+
+They must not duplicate Commerce Core business rules.
+
+---
+
+## Frontends
+
+```text
+admin-web      → React.js
+seller-web     → React.js
+supplier-web   → React.js
+storefront-web → Next.js
+```
+
+---
+
+## Background Runtime
+
+```text
+general-worker
+scheduler
+```
+
+Responsibilities include:
+
+### General Worker
+
+* Notifications
+* Internal async jobs
+* Shipment jobs
+* Payment-related jobs
+* Webhook deliveries
+* Cache invalidation
+* Background calculations
+
+### Scheduler
+
+* Reconciliation
+* Reservation expiry
+* Settlement cycles
+* Payout cycles
+* Cleanup
+* Periodic synchronization
+* Aggregation
+* Scheduled maintenance
+
+---
+
+# 12. Commerce Core
+
+The Commerce Core owns shared commercial business truth.
+
+Main modules:
+
+```text
+Markets
+Sellers
+Suppliers
+Stores
+Catalog
+Supplier Offers
+Listings
+Inventory
+Reservations
+Orders
+Payments
+Fulfillment
+Returns
+Finance
+Marketplace
+Billing
+```
+
+The APIs invoke Commerce Core application/domain services.
+
+Avoid:
+
+```text
+Admin Order Business Logic
+Seller Order Business Logic
+Supplier Order Business Logic
+```
+
+as separate implementations.
+
+Use one set of business rules.
+
+---
+
+# 13. API Boundary Rule
+
+APIs are actor-specific entry points, not independent domains.
+
+Example:
+
+```text
+Admin API
+    ↓
+Commerce Core
+
+Seller API
+    ↓
+Commerce Core
+
+Supplier API
+    ↓
+Commerce Core
+
+Storefront API
+    ↓
+Commerce Core
+```
+
+Do not create:
+
+```text
+Admin API → Seller API
+Seller API → Supplier API
+Supplier API → Admin API
+```
+
+for internal commerce operations.
+
+They should invoke shared domain/application logic directly.
+
+---
+
+# 14. Multi-Language Architecture
+
+Initial languages:
+
+```text
+Arabic  ar
+English en
+```
+
+Full support required from the beginning for:
+
+```text
+RTL
+LTR
+```
+
+The architecture must support future languages without schema redesign.
+
+---
+
+## Frontend
+
+All UI strings must use structured i18n resources.
+
+No hardcoded customer-facing strings inside components.
+
+Arabic must be tested as a first-class language, not added afterward.
+
+---
+
+## Backend
+
+Language negotiation may use:
+
+```http
+Accept-Language: ar
+Accept-Language: en
+```
+
+where localized responses are needed.
+
+---
+
+## Translated Business Content
+
+Use translation entities.
+
+Example:
+
+```text
+product_translations
+
+product_id
+locale
+name
+description
+```
+
+Also use translations for:
+
+```text
+categories
+marketplace content
+store pages
+theme content
+SEO content
+```
+
+Avoid:
+
+```text
+name_ar
+name_en
+name_fr
+```
+
+because this makes future languages expensive.
+
+---
+
+# 15. Localized Slugs and SEO
+
+Localized content should support localized slugs where necessary.
+
+Example:
+
+```text
+/product/coffee-maker
+/ar/product/ماكينة-قهوة
+```
+
+The exact URL design may vary, but the data model must not assume one universal slug for every language.
+
+Storefront architecture should support:
+
+* Canonical URLs
+* hreflang
+* Localized metadata
+* Localized structured data
+* Localized sitemap entries
+
+---
+
+# 16. Multi-Market Architecture
+
+The platform uses:
+
+# Market
+
+as a first-class domain concept.
+
+Examples:
+
+```text
+Egypt
+Saudi Arabia
+United Arab Emirates
+```
+
+Each market contains:
+
+```text
+country
+currency
+default locale
+supported locales
+timezone
+status
+market configuration
+shipping providers
+payment providers
+```
+
+Examples:
+
+```text
+EG
+Currency = EGP
+Locales = ar, en
+
+SA
+Currency = SAR
+Locales = ar, en
+
+AE
+Currency = AED
+Locales = ar, en
+```
+
+---
+
+# 17. Market Isolation
+
+Each Seller Store belongs to exactly one Market.
+
+Each Supplier Offer belongs to exactly one Market.
+
+Initial business rule:
+
+```text
+Seller Store Market
+=
+Supplier Offer Market
+```
+
+No cross-border supplier sourcing initially.
+
+This deliberately avoids early complexity involving:
+
+* Foreign currencies
+* International shipping
+* Customs
+* Cross-border returns
+* Taxes
+* Import regulations
+* International supplier settlements
+
+---
+
+# 18. Database-Enforced Market Integrity
+
+Market isolation must not rely only on Go validation.
+
+Model:
+
+```text
+Store
+(id, market_id)
+
+SupplierOffer
+(id, market_id)
+
+SellerListing
+(
+  store_id,
+  supplier_offer_id,
+  market_id
+)
+```
+
+Use database constraints so:
+
+```text
+SellerListing(store_id, market_id)
+→ Store(id, market_id)
+```
+
+and:
+
+```text
+SellerListing(supplier_offer_id, market_id)
+→ SupplierOffer(id, market_id)
+```
+
+Therefore:
+
+```text
+Store.market
+=
+Listing.market
+=
+SupplierOffer.market
+```
+
+invalid combinations cannot enter PostgreSQL.
+
+Changing Store Market after transactional activity exists should normally be prohibited.
+
+---
+
+# 19. Supplier Multi-Market Model
+
+A Supplier may operate in multiple markets.
+
+```text
+Supplier
+    ↓
+Supplier Market
+```
+
+Example:
+
+```text
+Supplier A
+
+├── Egypt
+├── Saudi Arabia
+└── UAE
+```
+
+Each operation may have its own:
+
+* Pricing
+* Inventory
+* Fulfillment locations
+* Integrations
+* Shipping capabilities
+* Settlement settings
+
+---
+
+# 20. Seller Multi-Market Model
+
+A Seller may own multiple Stores.
+
+Each Store belongs to one Market.
+
+Example:
+
+```text
+Seller
+├── Egypt Store
+└── Saudi Store
+```
+
+This provides clean separation for:
+
+* Currency
+* Catalog
+* Shipping
+* Payment
+* Pricing
+* Marketplace behavior
+
+---
+
+# 21. Fulfillment Location
+
+Fulfillment Location must be a first-class domain entity from the beginning.
+
+Do not model inventory as merely:
+
+```text
+Supplier + SKU
+```
+
+Instead:
+
+```text
+Supplier
+   ↓
+Supplier Market
+   ↓
+Fulfillment Location
+   ↓
+SKU Inventory
+```
+
+A Fulfillment Location may represent:
+
+* Supplier warehouse
+* Supplier branch
+* 3PL warehouse
+* Platform warehouse in the future
+
+Example:
+
+```text
+fulfillment_locations
+
+id
+supplier_id
+market_id
+name
+type
+status
+address
+shipping_capabilities
+```
+
+This prevents major redesign when multiple warehouses or 3PL fulfillment are introduced.
+
+---
+
+# 22. Inventory Ownership Model
+
+The authoritative stock belongs to an inventory pool associated with:
+
+```text
+SKU
++
+Fulfillment Location
+```
+
+not directly to a seller listing.
+
+Multiple seller listings may consume the same supplier inventory pool.
+
+Example:
+
+```text
+Supplier SKU Inventory = 100
+
+Seller A Listing
+Seller B Listing
+Seller C Listing
+
+All consume the same 100-unit pool.
+```
+
+---
+
+# 23. Money Representation
+
+Money must never use floating-point arithmetic.
+
+Do not use:
+
+```go
+float32
+float64
+```
+
+for monetary calculations.
+
+Use:
+
+```text
+amount_minor
+currency
+```
+
+where appropriate.
+
+Example:
+
+```text
+EGP 150.25
+
+amount_minor = 15025
+currency = EGP
+```
+
+If a market/currency requires more complex decimal precision, use an explicit decimal model.
+
+Centralize:
+
+* Currency precision
+* Rounding rules
+* Tax rounding
+* Commission rounding
+* Percentage calculation behavior
+
+Financial calculations must be deterministic.
+
+---
+
+# 24. Order Commercial Snapshot
+
+Order history must not depend on current product data.
+
+Every Order Item must capture a commercial snapshot.
+
+Example:
+
+```text
+order_item
+
+product_id
+variant_id
+sku_id
+
+product_name_snapshot
+variant_name_snapshot
+sku_snapshot
+
+seller_listing_id
+supplier_offer_id
+supplier_id
+
+seller_price_snapshot
+supplier_cost_snapshot
+
+platform_fee_snapshot
+discount_snapshot
+shipping_allocation_snapshot
+
+currency
+
+quantity
+```
+
+Changing a Product, Supplier Offer, Listing, or Price tomorrow must not rewrite yesterday's order economics.
+
+---
+
+# 25. Strong vs Eventual Consistency
+
+Consistency requirements must be explicit.
+
+## Strongly Consistent
+
+Must remain transactional:
+
+```text
+Inventory reservation
+Inventory release
+Order creation
+Payment financial state
+Ledger posting
+Settlement reservation
+Payout state transitions
+Market integrity
+```
+
+---
+
+## Eventually Consistent
+
+May propagate asynchronously:
+
+```text
+External seller store inventory
+External supplier inventory observations
+Search index
+Analytics
+Notifications
+Marketplace ranking
+Cache
+Seller dashboards aggregates
+External order status synchronization
+```
+
+The platform's transactional source of truth must remain distinguishable from external synchronized views.
+
+---
+
+# PHASE 0 — Engineering and Architecture Foundation
+
+## Objective
+
+Establish engineering conventions and lock critical architectural decisions before commerce development starts.
+
+---
+
+## Repository
+
+Recommended monorepo:
+
+```text
+/apps
+    admin-api/
+    seller-api/
+    supplier-api/
+    storefront-api/
+
+    workers/
+        general-worker/
+        scheduler/
+
+    integrations/
+        suppliers/
+        sellers/
+
+/web
+    admin/
+    seller/
+    supplier/
+    storefront/
+
+/internal
+    markets/
+    sellers/
+    suppliers/
+    stores/
+    catalog/
+    listings/
+    inventory/
+    orders/
+    payments/
+    fulfillment/
+    returns/
+    finance/
+    events/
+
+/packages
+    auth/
+    contracts/
+    messaging/
+    observability/
+    database/
+```
+
+---
+
+## Engineering Standards
+
+Implement:
+
+* Go project conventions
+* Dependency boundaries
+* Configuration management
+* Database migration framework
+* Structured logging
+* API error format
+* Validation
+* Request IDs
+* Correlation IDs
+* Graceful shutdown
+* Context propagation
+* Health endpoints
+* Readiness endpoints
+* Feature flags
+* Environment handling
+
+---
+
+# 26. Architecture Decisions Required During Phase 0
+
+Formalize ADRs covering:
+
+```text
+PostgreSQL as transactional source of truth
+
+Market isolation
+
+Fulfillment Location model
+
+Inventory reservation strategy
+
+Transactional Outbox
+
+Consumer Inbox / event idempotency
+
+Money representation
+
+Double-entry ledger
+
+Order commercial snapshots
+
+Independent integration deployment model
+
+Storefront tenant resolution
+
+Kafka introduction strategy
+```
+
+These must be settled before downstream implementations depend on them.
+
+---
+
+# 27. CI/CD
+
+Implement:
+
+* Go formatting
+* Go linting
+* Unit tests
+* Integration tests
+* Frontend lint
+* Frontend tests
+* Type checks
+* Docker builds
+* Migration checks
+* Dependency security scans
+* Secret scanning
+* Build reproducibility
+* Deployment workflow
+
+---
+
+# 28. Observability Foundation
+
+Use OpenTelemetry-compatible instrumentation.
+
+Monitor:
+
+```text
+API latency
+API errors
+Request count
+Database latency
+Database connection utilization
+Redis hit ratio
+RabbitMQ queue depth
+Worker retries
+DLQ size
+Webhook lag
+Integration failures
+Inventory reservation failures
+Order processing latency
+Payment failures
+Settlement failures
+```
+
+Business metrics should also be observable later.
+
+---
+
+# PHASE 1 — Identity, Localization and Markets
+
+## Implement
+
+### Identity
+
+* ZITADEL integration
+* Admin authentication
+* Seller authentication
+* Supplier authentication
+* MFA-compatible flows
+* Role mapping
+* Resource authorization foundation
+
+### Localization
+
+* Arabic
+* English
+* RTL
+* LTR
+* Translation framework
+* Localized validation messages
+
+### Markets
+
+* Countries
+* Currencies
+* Markets
+* Market locales
+* Market configuration
+
+Initial configuration can include:
+
+```text
+Egypt
+Saudi Arabia
+UAE
+```
+
+even if only Egypt launches first.
+
+---
+
+## Exit Criteria
+
+* Authentication works.
+* Authorization works.
+* Arabic works.
+* English works.
+* RTL works.
+* LTR works.
+* Market configuration works.
+* Tenant/resource boundaries are tested.
+
+---
+
+# PHASE 2 — Commerce Domain Foundation
+
+## Supplier Domain
+
+Implement:
+
+```text
+Supplier
+Supplier Member
+Supplier Market
+Supplier Settings
+Fulfillment Location
+```
+
+---
+
+## Seller Domain
+
+Implement:
+
+```text
+Seller
+Seller Member
+Seller Settings
+```
+
+---
+
+## Store Domain
+
+Implement:
+
+```text
+Store
+Store Domain
+Store Settings
+Store Market
+```
+
+---
+
+## Catalog
+
+Implement:
+
+```text
+Product
+Product Translation
+Variant
+SKU
+Category
+Category Translation
+Attributes
+Options
+Media
+```
+
+---
+
+## Supplier Commerce
+
+Implement:
+
+```text
+Supplier Product
+Supplier Offer
+Supplier Price
+Supplier Availability
+```
+
+---
+
+## Seller Commerce
+
+Implement:
+
+```text
+Seller Listing
+Seller Price
+Seller Listing Status
+```
+
+---
+
+## Inventory Foundation
+
+Implement:
+
+```text
+Inventory Snapshot
+Inventory Movement
+Inventory Reservation
+Inventory Adjustment
+```
+
+Even if checkout is introduced later, the inventory model must be designed correctly here.
+
+---
+
+# 29. Inventory Snapshot + Movement Ledger
+
+Use both:
+
+```text
+inventory_snapshot
+inventory_movements
+```
+
+Example movements:
+
+```text
+RECEIVED +100
+RESERVED -2
+RELEASED +1
+SHIPPED -1
+RETURNED +1
+ADJUSTED -3
+```
+
+The movement ledger provides traceability.
+
+The snapshot provides efficient current-state access.
+
+---
+
+# 30. Inventory Reservation Concurrency
+
+Reservation must be atomic.
+
+Preferred initial strategy:
+
+```sql
+UPDATE inventory_snapshot
+SET reserved = reserved + $quantity
+WHERE id = $inventory_id
+  AND available - reserved >= $quantity
+RETURNING id;
+```
+
+If no row is returned:
+
+```text
+Insufficient stock
+```
+
+For more complex multi-row reservation workflows, use row-level locks where justified.
+
+Do not default the entire checkout path to PostgreSQL SERIALIZABLE isolation unless actual need is demonstrated.
+
+---
+
+# 31. Inventory Reservation Entity
+
+Example:
+
+```text
+inventory_reservations
+
+id
+inventory_id
+order_id
+checkout_id
+quantity
+status
+expires_at
+idempotency_key
+created_at
+updated_at
+```
+
+Statuses:
+
+```text
+ACTIVE
+CONSUMED
+RELEASED
+EXPIRED
+```
+
+Reservation expiry must be idempotent.
+
+---
+
+# PHASE 3 — Admin, Supplier and Seller Platforms
+
+## Admin
+
+Implement:
+
+* Markets
+* Suppliers
+* Sellers
+* Stores
+* Products
+* Categories
+* Moderation
+* Users
+* Audit
+* Basic configuration
+
+---
+
+## Supplier Dashboard
+
+Implement:
+
+* Supplier profile
+* Supplier markets
+* Fulfillment locations
+* Products
+* Variants
+* Pricing
+* Inventory
+* Media
+* Settings
+* Members
+
+Manual product management must work before supplier integrations exist.
+
+---
+
+## Seller Dashboard
+
+Implement:
+
+* Seller profile
+* Store management
+* Browse supplier products
+* Filter by market
+* Import products
+* Selling price configuration
+* Listing management
+* Basic analytics
+* Members
+* Settings
+
+---
+
+## Exit Criteria
+
+This flow works without external integrations:
+
+```text
+Create Supplier
+      ↓
+Create Fulfillment Location
+      ↓
+Create Product
+      ↓
+Create Inventory
+      ↓
+Create Seller
+      ↓
+Create Store
+      ↓
+Browse Supplier Catalog
+      ↓
+Import Product
+      ↓
+Publish Listing
+```
+
+---
+
+# PHASE 4 — Native Storefront and Theme Engine
+
+## Storefront Architecture
+
+Use one Next.js storefront application capable of serving many seller stores.
+
+Store resolution:
+
+```text
+Incoming Request
+      ↓
+Host / Domain
+      ↓
+Store Resolver
+      ↓
+store_id
+      ↓
+market_id
+      ↓
+theme
+      ↓
+catalog
+```
+
+---
+
+# 32. Store Resolution
+
+Support:
+
+```text
+seller.platform.com
+seller-custom-domain.com
+```
+
+The Storefront API must resolve store context using a trusted domain-to-store mapping.
+
+Seller Dashboard APIs may use explicit store IDs.
+
+Public storefront requests should not trust arbitrary user-supplied store IDs when the domain already defines the tenant.
+
+---
+
+# 33. Tenant Isolation
+
+All storefront operations must be scoped to the resolved store.
+
+Examples:
+
+* Catalog queries
+* Cart
+* Checkout
+* Theme
+* Store settings
+* Pricing
+* Availability
+
+Cross-store data leakage is a critical security failure.
+
+Tenant isolation must be covered by integration and security tests.
+
+---
+
+# 34. Storefront Cache Strategy
+
+Cache keys must always include store context.
+
+Example:
+
+```text
+store:{store_id}:catalog:{version}:product:{product_id}
+```
+
+Avoid wildcard deletion over large Redis keyspaces.
+
+Prefer:
+
+* Versioned namespaces
+* Targeted invalidation
+* Event-driven invalidation
+
+---
+
+# 35. Theme Engine
+
+Sellers can:
+
+```text
+Install Free Theme
+Purchase Premium Theme
+```
+
+Entities:
+
+```text
+Theme
+Theme Version
+Theme Type
+Theme Price
+Theme Asset
+Theme Configuration Schema
+Theme Installation
+Theme License
+```
+
+Types:
+
+```text
+FREE
+PREMIUM
+```
+
+---
+
+## Configurable Theme Features
+
+* Logo
+* Colors
+* Typography
+* Header
+* Footer
+* Hero
+* Homepage sections
+* Product cards
+* Category layouts
+* Banners
+* Navigation
+* Layout settings
+
+All themes must support:
+
+```text
+Arabic
+English
+RTL
+LTR
+```
+
+---
+
+# 36. Theme Security
+
+Do not initially allow arbitrary JavaScript execution from sellers.
+
+Themes must be:
+
+* Platform-controlled
+* Versioned
+* Sandboxed by architecture
+* Compatible with predefined rendering contracts
+
+Third-party theme development may be introduced only after a safe extension model exists.
+
+---
+
+# PHASE 5 — Cart, Checkout, Orders and Inventory Transactions
+
+## Implement
+
+```text
+Customer
+Customer Address
+Cart
+Cart Item
+Checkout Session
+Order
+Order Item
+Order Timeline
+Order Note
+```
+
+Initial order lifecycle:
+
+```text
+PENDING
+CONFIRMED
+PROCESSING
+READY_FOR_SHIPPING
+SHIPPED
+OUT_FOR_DELIVERY
+DELIVERED
+CANCELLED
+RETURNED
+```
+
+Use an explicit state machine.
+
+---
+
+# 37. Checkout Transaction
+
+Critical path:
+
+```text
+Validate Store
+Validate Market
+Validate Listings
+Validate Prices
+Reserve Inventory
+Create Order
+Create Order Items
+Create Outbox Events
+Commit
+Return Order
+```
+
+Do not synchronously call:
+
+* Courier
+* External supplier
+* External seller store
+* Analytics system
+* Email provider
+
+inside the main order transaction.
+
+---
+
+# 38. Transactional Outbox
+
+Use a PostgreSQL Transactional Outbox.
+
+Example:
+
+```text
+outbox_events
+
+event_id
+aggregate_type
+aggregate_id
+aggregate_version
+event_type
+schema_version
+payload
+correlation_id
+causation_id
+occurred_at
+published_at
+created_at
+```
+
+Every event receives a generated unique:
+
+```text
+event_id
+```
+
+Do not derive event identity from payload hashes.
+
+---
+
+# 39. Outbox Publishing
+
+Initial implementation:
+
+```text
+PostgreSQL
+    ↓
+Polling Outbox Publisher
+    ↓
+Event Transport
+```
+
+Workers may use:
+
+```sql
+FOR UPDATE SKIP LOCKED
+```
+
+to safely process batches concurrently.
+
+Do not introduce Debezium/CDC in the MVP unless required.
+
+---
+
+# 40. Event Consumer Inbox
+
+All important event consumers should use an idempotency/inbox mechanism.
+
+Example:
+
+```text
+processed_events
+
+consumer_name
+event_id
+processed_at
+```
+
+Unique:
+
+```text
+(consumer_name, event_id)
+```
+
+Processing flow:
+
+```text
+Receive Event
+      ↓
+Check Inbox
+      ↓
+Already Processed?
+      ├── Yes → Ignore
+      └── No
+           ↓
+      Process Transaction
+           ↓
+      Record Inbox Entry
+           ↓
+         Commit
+```
+
+---
+
+# 41. Event Ordering
+
+Use:
+
+```text
+aggregate_id
+aggregate_version
+```
+
+for causal ordering.
+
+Do not rely purely on timestamps.
+
+Future Kafka partitioning should usually use:
+
+```text
+Order events     → order_id
+Inventory events → inventory_id / SKU pool
+Seller events    → seller_id
+```
+
+depending on event semantics.
+
+---
+
+# PHASE 6 — Shipping
+
+Begin with one shipping provider in the first launch market.
+
+Commerce Core owns:
+
+```text
+Shipment
+Shipment Item
+Shipment Status
+Tracking
+Shipping Cost
+COD Amount
+Shipment Events
+```
+
+Provider-specific logic belongs behind a provider adapter.
+
+Conceptual operations:
+
+```text
+CreateShipment
+CancelShipment
+TrackShipment
+CalculateRate
+HandleWebhook
+```
+
+---
+
+# 42. Shipment State Machine
+
+Model shipping transitions explicitly.
+
+Support future:
+
+* Partial shipments
+* Multiple packages
+* Split fulfillment locations
+* Failed delivery
+* Return-to-origin
+* Reattempts
+
+Do not assume:
+
+```text
+Order = exactly one Shipment
+```
+
+---
+
+# PHASE 7 — Payments
+
+Initial methods:
+
+```text
+Cash on Delivery
++
+One Electronic Payment Provider
+```
+
+Implement:
+
+```text
+Payment
+Payment Attempt
+Payment Status
+Refund
+Payment Provider Reference
+```
+
+---
+
+# 43. Payment State Machine
+
+Example:
+
+```text
+CREATED
+PENDING
+AUTHORIZED
+CAPTURED
+FAILED
+CANCELLED
+PARTIALLY_REFUNDED
+REFUNDED
+```
+
+Provider-specific behavior may vary.
+
+Internal states must remain deterministic.
+
+---
+
+# 44. Payment Idempotency
+
+Strict idempotency is required for:
+
+* Payment creation
+* Capture
+* Refund
+* Cancel
+* Webhook processing
+* Payment retry
+
+Never assume provider APIs execute exactly once.
+
+---
+
+# 45. Webhook Inbox Pattern
+
+All external webhooks should follow:
+
+```text
+Receive
+   ↓
+Verify Signature
+   ↓
+Persist Envelope
+   ↓
+Deduplicate
+   ↓
+Return 2xx Quickly
+   ↓
+Queue Async Processing
+   ↓
+Process
+```
+
+Example:
+
+```text
+webhook_inbox
+
+id
+provider
+connection_id
+provider_event_id
+event_type
+payload
+payload_hash
+signature_verified
+received_at
+status
+attempt_count
+processed_at
+```
+
+Where available, uniqueness should use:
+
+```text
+provider
+connection_id
+provider_event_id
+```
+
+---
+
+# 46. Webhook Ordering
+
+Never assume webhook delivery order.
+
+Internal state machines must reject stale transitions.
+
+Example:
+
+If:
+
+```text
+Payment = CAPTURED
+```
+
+and an old:
+
+```text
+AUTHORIZED
+```
+
+webhook arrives later, it must not regress the state.
+
+Reconciliation handles events that never arrive.
+
+---
+
+# PHASE 8 — Financial Ledger, Reconciliation and Settlements
+
+This phase is critical.
+
+Financial architecture must be specified before implementation begins.
+
+---
+
+# 47. Double-Entry Ledger
+
+The financial subsystem must use immutable double-entry accounting.
+
+Do not model financial truth only as mutable:
+
+```text
+seller_balance
+supplier_balance
+```
+
+Balances may exist as derived snapshots, but the journal remains authoritative.
+
+---
+
+# 48. Ledger Model
+
+Core concepts:
+
+```text
+Ledger Account
+Journal Transaction
+Ledger Entry
+Balance Snapshot
+Settlement
+Payout
+Reconciliation
+```
+
+Example:
+
+```text
+journal_transactions
+
+id
+type
+reference_type
+reference_id
+currency
+status
+created_at
+```
+
+```text
+ledger_entries
+
+id
+journal_transaction_id
+ledger_account_id
+direction
+amount_minor
+currency
+created_at
+```
+
+For every posted journal transaction:
+
+```text
+SUM(DEBIT)
+=
+SUM(CREDIT)
+```
+
+per currency.
+
+---
+
+# 49. Ledger Immutability
+
+Posted entries cannot be edited.
+
+Corrections use:
+
+```text
+Reversal
++
+Replacement Transaction
+```
+
+not direct updates.
+
+---
+
+# 50. Example Accounts
+
+Possible accounts include:
+
+```text
+Cash / Payment Clearing
+
+COD Receivable
+
+Seller Payable
+
+Supplier Payable
+
+Courier Payable
+
+Payment Provider Payable
+
+Platform Revenue
+
+Shipping Revenue
+
+Refund Liability
+
+Promotional Expense
+
+Settlement In Transit
+```
+
+Actual account design must be finalized before ledger implementation.
+
+---
+
+# 51. Financial Idempotency
+
+Strict idempotency required for:
+
+```text
+Journal posting
+Payment capture
+Refund
+Settlement creation
+Payout creation
+Payout confirmation
+COD reconciliation
+Courier reconciliation
+Payment provider reconciliation
+```
+
+---
+
+# 52. Settlement Architecture
+
+Use one financial foundation.
+
+Do not build four independent accounting implementations.
+
+Recommended structure:
+
+```text
+Finance
+│
+├── Ledger
+├── Accounts
+├── Reconciliation
+├── Settlement Engine
+├── Payouts
+└── Policies
+      ├── Seller
+      ├── Supplier
+      ├── Courier
+      └── Payment Provider
+```
+
+Different parties may have different:
+
+* Settlement cycles
+* Fees
+* Hold periods
+* Minimum payout
+* Payout methods
+* Dispute rules
+
+but they share the same ledger foundation.
+
+---
+
+# 53. Payout State Machine
+
+Payout is an external side effect and cannot participate in one ACID transaction with PostgreSQL.
+
+Use a state machine:
+
+```text
+PROPOSED
+APPROVED
+RESERVED
+PROCESSING
+SUCCEEDED
+FAILED
+REVERSED
+```
+
+Example flow:
+
+```text
+Calculate Settlement
+      ↓
+Reserve Payable Amount
+      ↓
+Commit
+      ↓
+Call Payment/Bank Provider
+      ↓
+Receive Confirmation
+      ↓
+Post Final Ledger Entries
+      ↓
+Reconcile
+```
+
+---
+
+# PHASE 9 — Integration Foundation
+
+External integrations should begin only after internal contracts for:
+
+```text
+Products
+Listings
+Inventory
+Orders
+Shipping
+Payments
+Fulfillment
+```
+
+are reasonably stable.
+
+---
+
+# 54. Integration Deployment Principle
+
+Every external integration context is independently deployable.
+
+Examples:
+
+## Supplier
+
+```text
+salla-supplier-integration
+shopify-supplier-integration
+woocommerce-supplier-integration
+api-supplier-integration
+```
+
+## Seller
+
+```text
+salla-seller-integration
+shopify-seller-integration
+woocommerce-seller-integration
+easyorders-seller-integration
+api-seller-integration
+```
+
+There is no requirement for a central Salla Service or Shopify Service.
+
+---
+
+# 55. Integration Isolation
+
+Example:
+
+```text
+salla-supplier-integration
+```
+
+and:
+
+```text
+salla-seller-integration
+```
+
+must be independently:
+
+* Deployable
+* Versioned
+* Scalable
+* Observable
+* Recoverable
+* Releasable
+
+A Seller-specific change must not require Supplier Integration deployment.
+
+---
+
+# 56. Safe Shared Libraries
+
+Shared libraries may include:
+
+```text
+logging
+tracing
+messaging
+HTTP utilities
+retry utilities
+encryption
+database helpers
+event contracts
+```
+
+A tiny provider SDK may be shared only when genuinely generic.
+
+Do not share:
+
+```text
+syncProducts()
+syncOrders()
+syncInventory()
+```
+
+business workflows merely because both contexts use Salla or Shopify.
+
+Some duplication is preferable to release coupling.
+
+---
+
+# 57. Supplier Integration Responsibilities
+
+Example:
+
+```text
+salla-supplier-integration
+```
+
+may handle:
+
+* Product import
+* Variant import
+* Price import
+* Inventory import
+* Product availability
+* Order export
+* Cancellation export
+* Fulfillment import
+* Webhooks
+* Polling
+* Reconciliation
+* Mapping
+* Retries
+* Rate limits
+* OAuth
+* Token refresh
+
+---
+
+# 58. Seller Integration Responsibilities
+
+Example:
+
+```text
+salla-seller-integration
+```
+
+may handle:
+
+* Product publishing
+* Variant publishing
+* Price publishing
+* Inventory publishing
+* Order import
+* Customer import where needed
+* Cancellation import
+* Return import
+* Fulfillment status export
+* Webhooks
+* Reconciliation
+* Mapping
+* OAuth
+* Retries
+* Rate limits
+
+---
+
+# 59. Integration Data Ownership
+
+Integration applications own only integration state.
+
+Examples:
+
+```text
+connections
+external mappings
+sync cursors
+webhook inbox
+sync jobs
+reconciliation status
+provider metadata
+```
+
+They do not own authoritative:
+
+```text
+Products
+Orders
+Inventory
+Payments
+Balances
+```
+
+Commerce Core remains authoritative.
+
+---
+
+# 60. Integration Reconciliation Framework
+
+Every integration must support three synchronization mechanisms where appropriate:
+
+```text
+Webhook / realtime updates
+        +
+Incremental sync
+        +
+Reconciliation
+```
+
+Do not rely exclusively on webhooks.
+
+---
+
+# 61. Synchronization State
+
+Maintain:
+
+```text
+last_successful_sync
+sync_cursor
+last_reconciled_at
+external_version
+internal_version
+mapping_status
+sync_status
+last_error
+```
+
+---
+
+# 62. External Entity Mapping
+
+Example:
+
+```text
+external_entity_mappings
+
+connection_id
+entity_type
+internal_id
+external_id
+external_version
+mapping_status
+last_synced_at
+conflict_status
+```
+
+Enforce uniqueness appropriate to each provider.
+
+---
+
+# 63. Conflict Resolution
+
+Each Integration must explicitly define:
+
+* Internal source of truth
+* External source of truth
+* Direction of synchronization
+* Manual override behavior
+* Conflict resolution
+* Deletion behavior
+
+Example:
+
+Seller Store:
+
+```text
+Platform Inventory
+→ External Store
+
+External Order
+→ Platform
+```
+
+Do not use generic last-write-wins blindly.
+
+---
+
+# 64. Integration Reconciliation
+
+Reconciliation frequency should be provider and data-type specific.
+
+Examples:
+
+```text
+Inventory → frequent
+Orders → frequent
+Fulfillment → frequent
+Products → slower
+Historical data → background
+```
+
+Do not force one global daily full synchronization strategy.
+
+---
+
+# 65. Integration Backpressure
+
+Large synchronization tasks must use:
+
+* Queues
+* Batching
+* Rate controls
+* Debouncing
+* Retry windows
+
+Example:
+
+```text
+Inventory 10 → 9 → 8 → 7
+```
+
+should ideally result in:
+
+```text
+external update = 7
+```
+
+rather than four redundant API calls when safe.
+
+---
+
+# PHASE 10 — First Supplier Integration
+
+Implement one Supplier Integration end-to-end.
+
+For an Egypt-first MVP, WooCommerce may be a reasonable first candidate.
+
+Capabilities:
+
+```text
+Connect
+Authenticate
+Import Product
+Import Variants
+Import Inventory
+Import Pricing
+Map External Entities
+Reconcile
+Push Order
+Pull Fulfillment
+Handle Webhooks
+```
+
+Use this first implementation to validate Integration architecture.
+
+---
+
+# PHASE 11 — First Seller Integration
+
+Implement the matching or most commercially relevant Seller integration.
+
+Capabilities:
+
+```text
+Connect
+Authenticate
+Publish Product
+Publish Variants
+Publish Price
+Publish Inventory
+Import Orders
+Handle Cancellations
+Push Status
+Reconcile
+Handle Webhooks
+```
+
+---
+
+# PHASE 12 — Public Integration API
+
+After internal integration contracts stabilize, expose a Public API for:
+
+* Custom supplier systems
+* Custom seller stores
+* Agencies
+* Enterprise merchants
+
+Capabilities:
+
+```text
+Products
+Inventory
+Orders
+Fulfillment
+Webhooks
+```
+
+Require:
+
+* Authentication
+* Authorization
+* Rate limiting
+* Idempotency
+* Versioning
+* Auditability
+
+---
+
+# PHASE 13 — Unified Marketplace
+
+Do not build a broad consumer marketplace before sufficient supply and sellers exist.
+
+Start with curated discovery:
+
+```text
+Trending
+Best Sellers
+Unique Products
+New Products
+Offers
+Fast Delivery
+```
+
+Marketplace-generated orders may carry additional commission.
+
+---
+
+# PHASE 14 — Reputation
+
+Introduce:
+
+## Seller Score
+
+Signals:
+
+```text
+Delivered Orders
+Cancellation Rate
+Return Rate
+Ratings
+Fulfillment Performance
+Sales
+Response SLA
+```
+
+## Supplier Score
+
+```text
+Inventory Accuracy
+Fulfillment Speed
+Order Accuracy
+Return Rate
+Product Quality
+Stock Reliability
+```
+
+## Product Score
+
+```text
+Sales Velocity
+Conversion
+Delivered Rate
+Return Rate
+Margin
+Rating
+Saturation
+Trend
+```
+
+---
+
+# PHASE 15 — Product Intelligence
+
+Initially use deterministic analytics.
+
+Examples:
+
+```text
+Best Products
+Trending Products
+High Margin
+Low Return
+Rising Products
+Saturated Products
+Best Suppliers
+Best Sellers
+```
+
+Introduce ML/AI only after enough historical data exists.
+
+---
+
+# PHASE 16 — Protected Product Access
+
+Introduce seller tiers after platform activity justifies them.
+
+Example:
+
+```text
+Starter
+Growth
+Pro
+Elite
+```
+
+May control:
+
+* Exclusive products
+* Early access
+* Reserved supply
+* Fees
+* Marketplace priority
+* Faster settlements
+
+Rules should be transparent and performance-based.
+
+---
+
+# PHASE 17 — Premium Themes and Theme Marketplace
+
+After native storefront success:
+
+```text
+Premium Theme Purchase
+Theme Licensing
+Theme Versioning
+Theme Updates
+Theme Compatibility
+```
+
+Third-party developers may be introduced only after a secure extension model exists.
+
+---
+
+# PHASE 18 — Dropship-to-Microbrand
+
+Advanced phase.
+
+Enable proven sellers to move:
+
+```text
+Generic Product
+        ↓
+Validated Demand
+        ↓
+Reserved Inventory
+        ↓
+Custom Packaging
+        ↓
+Unique Variant
+        ↓
+Private Label / Microbrand
+```
+
+This should not be part of initial MVP scope.
+
+---
+
+# PHASE 19 — Additional Market Expansion
+
+Adding a market should require configuration and provider enablement, not a separate codebase.
+
+Example:
+
+```text
+Saudi Arabia
+UAE
+```
+
+Enable:
+
+* Currency
+* Locale
+* Shipping providers
+* Payment providers
+* Marketplace rules
+* Integrations
+
+Maintain:
+
+```text
+Store Market
+=
+Supplier Offer Market
+```
+
+until cross-border commerce is deliberately designed.
+
+---
+
+# PHASE 20 — Large-Scale Optimization
+
+Scale based on metrics.
+
+---
+
+## API Scaling
+
+Possible future:
+
+```text
+admin-api      × 2
+supplier-api   × 4
+seller-api     × 15
+storefront-api × 50
+```
+
+---
+
+## Integration Scaling
+
+Example:
+
+```text
+salla-seller        × 20
+woocommerce-seller  × 8
+
+salla-supplier      × 3
+woocommerce-supplier × 2
+```
+
+---
+
+# 66. Database Scaling Strategy
+
+Evolution:
+
+```text
+PostgreSQL Primary
+        ↓
+Connection Pooling
+        ↓
+Read Replicas
+        ↓
+Partition Selected Tables
+        ↓
+Separate Databases only when justified
+```
+
+Avoid premature:
+
+```text
+Sharding
+Database-per-service
+Distributed SQL
+```
+
+---
+
+# 67. Candidate High-Volume Tables
+
+Possible future partitioning candidates:
+
+```text
+inventory_movements
+order_events
+payment_events
+shipment_events
+webhook_inbox
+audit_logs
+ledger_entries
+```
+
+Only partition when observed size/query behavior justifies it.
+
+---
+
+# 68. Storefront Performance Architecture
+
+Typical path:
+
+```text
+Customer
+   ↓
+CDN
+   ↓
+Next.js
+   ↓
+Storefront API
+   ↓
+Redis
+   ↓
+PostgreSQL
+```
+
+Most browse traffic should avoid PostgreSQL when cached data remains valid.
+
+---
+
+# 69. Object Storage
+
+Product and storefront media should follow:
+
+```text
+Dashboard
+    ↓
+Presigned Upload
+    ↓
+Object Storage
+    ↓
+CDN
+    ↓
+Customer
+```
+
+Do not store large binary media in PostgreSQL.
+
+Do not proxy normal media delivery through Go APIs.
+
+---
+
+# 70. Security Architecture
+
+Must include:
+
+* ZITADEL
+* MFA support
+* Role enforcement
+* Object-level authorization
+* Tenant isolation
+* Input validation
+* Rate limits
+* Secure headers
+* CORS
+* CSRF protection where applicable
+* Webhook signatures
+* Replay protection
+* Audit logs
+* Secret encryption
+* Credential rotation
+* Public API security
+
+Integration credentials must never be stored as plaintext.
+
+---
+
+# 71. Webhook Security
+
+For each provider:
+
+```text
+Verify Signature
+Verify Timestamp where supported
+Reject invalid events
+Prevent replay
+Store raw envelope
+Deduplicate
+Audit failures
+```
+
+Webhook endpoints should perform minimal synchronous work.
+
+---
+
+# 72. Failure Handling
+
+## PostgreSQL unavailable
+
+Transactional operations fail safely.
+
+Do not accept:
+
+* Orders
+* Payments
+* Inventory reservations
+* Financial postings
+
+without authoritative persistence.
+
+---
+
+## Redis unavailable
+
+System should degrade where possible.
+
+Examples:
+
+* Cache misses fall back to PostgreSQL.
+* Some rate limits may degrade according to security policy.
+* Transactional state remains safe.
+
+---
+
+## RabbitMQ unavailable
+
+Do not lose asynchronous work.
+
+Transactional operations requiring later jobs should use persisted outbox/job records where appropriate.
+
+---
+
+## Kafka unavailable
+
+If Kafka is introduced later:
+
+Core transactions continue using PostgreSQL.
+
+Events remain recoverable through Outbox.
+
+---
+
+## External Supplier unavailable
+
+* Do not lose internal orders.
+* Queue synchronization.
+* Retry.
+* Reconcile later.
+* Surface degraded integration health.
+
+---
+
+## Seller Store unavailable
+
+* Platform order state remains authoritative.
+* External updates queue.
+* Retry later.
+* Reconcile.
+
+---
+
+## Payment Provider unavailable
+
+Electronic payment checkout may temporarily fail or disable that payment method.
+
+COD may remain available if appropriate.
+
+---
+
+## Shipping Provider unavailable
+
+Order can remain accepted where business rules permit, with shipment creation retried asynchronously.
+
+---
+
+# 73. Testing Strategy
+
+## Unit Tests
+
+Cover:
+
+* Market isolation
+* Inventory reservation
+* Reservation expiry
+* Order transitions
+* Payment transitions
+* Ledger balancing
+* Settlement policies
+* Pricing
+* Permission rules
+
+---
+
+## Integration Tests
+
+Cover:
+
+```text
+PostgreSQL
+Redis
+RabbitMQ
+ZITADEL boundaries
+External integration adapters
+```
+
+Kafka integration tests begin when Kafka is introduced.
+
+---
+
+## Concurrency Tests
+
+Mandatory for inventory.
+
+Test:
+
+```text
+100+ concurrent reservation attempts
+against the same inventory pool
+```
+
+Verify:
+
+```text
+No overselling
+No negative availability
+Correct reservation count
+```
+
+---
+
+## Contract Tests
+
+Especially important for independent integrations.
+
+Verify that:
+
+```text
+Commerce Contracts
+↔
+Integration Deployments
+```
+
+remain compatible.
+
+---
+
+## Financial Tests
+
+Must verify:
+
+```text
+Debit = Credit
+No duplicated posting
+Idempotent refund
+Idempotent settlement
+Payout retry
+Reversal correctness
+Reconciliation correctness
+```
+
+---
+
+## End-to-End
+
+Critical journey:
+
+```text
+Supplier Product
+      ↓
+Inventory
+      ↓
+Seller Listing
+      ↓
+Storefront
+      ↓
+Customer Checkout
+      ↓
+Inventory Reservation
+      ↓
+Order
+      ↓
+Payment/COD
+      ↓
+Shipment
+      ↓
+Delivery
+      ↓
+Ledger Entries
+      ↓
+Seller/Supplier Settlement
+```
+
+---
+
+# 74. Definition of Done
+
+A phase is complete only when:
+
+* Scope is implemented.
+* Unit tests pass.
+* Integration tests pass.
+* Required concurrency tests pass.
+* Required financial tests pass.
+* Security controls are applied.
+* Arabic is tested.
+* English is tested.
+* RTL is tested.
+* LTR is tested.
+* Authorization is tested.
+* Database migrations are tested.
+* API contracts are documented.
+* Events/contracts are documented.
+* Observability exists.
+* Failure behavior is tested.
+* Deployment succeeds.
+* No unresolved blocker exists for dependent phases.
+
+---
+
+# 75. Documentation Structure
+
+Recommended:
+
+```text
+docs/
+├── architecture/
+├── decisions/
+├── implementation/
+├── integrations/
+├── api/
+├── finance/
+└── backlog/
+```
+
+---
+
+## Architecture Decisions
+
+Examples:
+
+```text
+ADR-001-postgresql-source-of-truth.md
+
+ADR-002-market-isolation.md
+
+ADR-003-money-representation.md
+
+ADR-004-fulfillment-location.md
+
+ADR-005-inventory-reservation.md
+
+ADR-006-transactional-outbox.md
+
+ADR-007-consumer-inbox.md
+
+ADR-008-double-entry-ledger.md
+
+ADR-009-integration-deployment-model.md
+
+ADR-010-storefront-tenant-resolution.md
+
+ADR-011-theme-security.md
+
+ADR-012-kafka-introduction.md
+```
+
+---
+
+# 76. Commercially Usable MVP
+
+The MVP should remain smaller than the complete roadmap.
+
+## Mandatory MVP
+
+```text
+P0 Engineering Foundation
+
+P1 Identity
+   Arabic / English
+   RTL / LTR
+   Markets
+
+P2 Commerce Core
+   Suppliers
+   Sellers
+   Stores
+   Catalog
+   Supplier Offers
+   Listings
+   Fulfillment Locations
+   Inventory
+
+P3 Admin / Seller / Supplier Dashboards
+
+P4 Native Storefront
+   Basic Theme Engine
+   Free Themes
+
+P5 Cart / Checkout / Orders
+   Atomic Inventory Reservations
+
+P6 Shipping
+   One provider
+
+P7 Payments
+   COD
+   One electronic provider
+
+P8 Double-Entry Ledger
+   Seller/Supplier financial state
+   Basic settlements
+
+P9 Integration Foundation
+
+P10 First Supplier Integration
+
+P11 First Seller Integration
+```
+
+---
+
+# 77. Optional MVP Features
+
+May be added if launch requirements justify them:
+
+```text
+Basic analytics
+Premium Theme
+Additional payment provider
+Additional shipping provider
+Second external integration
+Simple marketplace discovery
+```
+
+---
+
+# 78. Deliberately Postponed Features
+
+Do not block MVP on:
+
+```text
+Kafka production deployment
+Large-scale consumer marketplace
+AI product recommendations
+ML ranking
+Protected catalog
+Seller tiers
+Theme developer marketplace
+Microbrand
+Cross-border sourcing
+Warehouse ownership
+Advanced search engine
+Database sharding
+Kubernetes
+Service mesh
+```
+
+---
+
+# 79. Post-MVP Roadmap
+
+```text
+Public Integration API
+
+Additional Supplier Integrations
+
+Additional Seller Integrations
+
+Unified Marketplace
+
+Reviews and Reputation
+
+Product Intelligence
+
+Protected Product Access
+
+Premium Theme Marketplace
+
+Microbrand
+
+Saudi Expansion
+
+UAE Expansion
+
+Advanced Analytics
+
+Search Infrastructure
+
+Kafka Event Backbone
+
+Large-Scale Optimization
+```
+
+---
+
+# 80. Final Architecture
+
+```text
+                         ZITADEL
+                            │
+      ┌─────────────────────┼─────────────────────┐
+      │                     │                     │
+  Admin Web            Seller Web           Supplier Web
+      │                     │                     │
+  Admin API             Seller API           Supplier API
+      │                     │                     │
+      └─────────────────────┼─────────────────────┘
+                            │
+                      COMMERCE CORE
+                            │
+               ┌────────────┼────────────┐
+               │            │            │
+          PostgreSQL      Redis      Transactional
+                                     Outbox
+                                          │
+                                ┌─────────┴─────────┐
+                                │                   │
+                            RabbitMQ              Kafka
+                             MVP Core         Scale / Events
+                                │
+                ┌───────────────┴──────────────────┐
+                │                                  │
+        Supplier Integrations              Seller Integrations
+                │                                  │
+      ┌─────────┼─────────┐              ┌─────────┼─────────┐
+      │         │         │              │         │         │
+    Salla     Shopify     Woo          Salla     Shopify     Woo
+   Supplier   Supplier  Supplier       Seller     Seller     Seller
+```
+
+Storefront path:
+
+```text
+Customer
+   │
+   ▼
+  CDN
+   │
+   ▼
+Next.js Storefront
+   │
+   ▼
+Storefront API
+   │
+   ▼
+Commerce Core
+```
+
+Media:
+
+```text
+Seller/Supplier Dashboard
+          │
+          ▼
+   Presigned Upload
+          │
+          ▼
+    Object Storage
+          │
+          ▼
+         CDN
+```
+
+---
+
+# 81. Final Architectural Rules
+
+## Rule 1
+
+PostgreSQL is the transactional source of truth.
+
+## Rule 2
+
+Redis is never authoritative for business or financial state.
+
+## Rule 3
+
+The Commerce Core owns business rules.
+
+## Rule 4
+
+Admin, Seller, Supplier, and Storefront APIs are independent actor-facing boundaries.
+
+## Rule 5
+
+Integration deployments are independently deployable and independently scalable.
+
+## Rule 6
+
+Supplier and Seller integrations for the same external platform remain independent.
+
+## Rule 7
+
+Inventory reservation is strongly consistent.
+
+## Rule 8
+
+External synchronization is eventually consistent.
+
+## Rule 9
+
+Every inventory pool belongs to a Fulfillment Location.
+
+## Rule 10
+
+Orders preserve immutable commercial snapshots.
+
+## Rule 11
+
+All financial truth is derived from an immutable double-entry ledger.
+
+## Rule 12
+
+External payouts use state machines and reconciliation, not distributed transactions.
+
+## Rule 13
+
+Transactional Outbox prevents database/event loss.
+
+## Rule 14
+
+Consumers are idempotent using event identity.
+
+## Rule 15
+
+Webhooks use Inbox + Deduplication + Async Processing + Reconciliation.
+
+## Rule 16
+
+Market isolation is enforced in both the domain layer and PostgreSQL constraints.
+
+## Rule 17
+
+Monetary values never use floating-point arithmetic.
+
+## Rule 18
+
+Arabic and English are first-class languages from the beginning.
+
+## Rule 19
+
+Each Seller Store belongs to exactly one Market.
+
+## Rule 20
+
+Cross-border sourcing remains intentionally unsupported initially.
+
+## Rule 21
+
+Themes are versioned and controlled; arbitrary seller JavaScript is not allowed initially.
+
+## Rule 22
+
+Kafka is introduced when event scale and replay requirements justify it.
+
+## Rule 23
+
+Scaling decisions must be based on measured operational evidence.
+
+---
+
+# 82. Architecture Goal
+
+The final platform is designed to be:
+
+**Multilingual**
+
+**Multi-market**
+
+**Themeable**
+
+**Integration-ready**
+
+**Financially auditable**
+
+**Inventory-safe**
+
+**Event-driven**
+
+**Horizontally scalable**
+
+**Operationally resilient**
+
+while still allowing the first production version to remain operationally lean.
