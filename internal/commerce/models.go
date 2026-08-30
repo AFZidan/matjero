@@ -76,14 +76,17 @@ type Store struct {
 }
 
 type StoreDomain struct {
-	ID         string     `json:"id"`
-	StoreID    string     `json:"store_id"`
-	Domain     string     `json:"domain"`
-	IsPrimary  bool       `json:"is_primary"`
-	VerifiedAt *time.Time `json:"verified_at,omitempty"`
-	Status     string     `json:"status"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID                string     `json:"id"`
+	StoreID           string     `json:"store_id"`
+	Domain            string     `json:"domain"`
+	IsPrimary         bool       `json:"is_primary"`
+	VerifiedAt        *time.Time `json:"verified_at,omitempty"`
+	Status            string     `json:"status"`
+	DomainType        string     `json:"domain_type,omitempty"`
+	VerificationToken *string    `json:"verification_token,omitempty"`
+	LastCheckedAt     *time.Time `json:"last_checked_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type StoreSettings struct {

@@ -3,11 +3,20 @@ package commerce
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
 type Service struct {
 	repo Repository
+
+	// PlatformDomain is the base domain under which platform-generated store
+	// subdomains are allocated (e.g. "<store-code>.matjero.com"). When empty, no
+	// subdomain is auto-allocated at store creation.
+	PlatformDomain string
+	// ReservedSubdomains are store-code labels that may not be claimed by sellers
+	// because they are reserved for platform use.
+	ReservedSubdomains []string
 }
 
 func NewService(repo Repository) Service {
@@ -73,7 +82,27 @@ func (s Service) CreateStoreForSubject(ctx context.Context, subject, sellerID, m
 	if _, err := s.RequireSellerAccess(ctx, subject, sellerID); err != nil {
 		return Store{}, err
 	}
-	return s.repo.CreateStore(ctx, sellerID, marketCode, code, name, status, settings)
+
+	store, err := s.repo.CreateStore(ctx, sellerID, marketCode, code, name, status, settings)
+	if err != nil {
+		return Store{}, err
+	}
+
+	if s.PlatformDomain != "" {
+		normalizedCode := strings.ToLower(strings.TrimSpace(code))
+		for _, reserved := range s.ReservedSubdomains {
+			if normalizedCode == strings.ToLower(strings.TrimSpace(reserved)) {
+				return Store{}, ErrInvalidInput
+			}
+		}
+		subdomain := fmt.Sprintf("%s.%s", normalizedCode, s.PlatformDomain)
+		now := time.Now()
+		if _, err := s.repo.CreateStoreDomain(ctx, store.ID, subdomain, "active", true, &now); err != nil {
+			return Store{}, err
+		}
+	}
+
+	return store, nil
 }
 
 func (s Service) CreateFulfillmentLocationForSubject(ctx context.Context, subject, supplierID, supplierMarketID, marketCode, code, name, locationType, status string) (FulfillmentLocation, error) {
