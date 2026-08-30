@@ -12,7 +12,7 @@ import "time"
 // live storefront.
 type ThemeConfiguration struct {
 	ID                string         `json:"id"`
-	InstallationID   string         `json:"installation_id"`
+	InstallationID    string         `json:"installation_id"`
 	DraftConfig       map[string]any `json:"draft_config"`
 	PublishedConfig   map[string]any `json:"published_config"`
 	DraftRevision     int            `json:"draft_revision"`

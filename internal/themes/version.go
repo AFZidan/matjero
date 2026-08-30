@@ -17,16 +17,16 @@ const (
 // Immutability invariant: once a version is Published it must not be mutated
 // in place. A change requires publishing a new version (v1 -> v2).
 type ThemeVersion struct {
-	ID                     string         `json:"id"`
-	ThemeID                string         `json:"theme_id"`
-	Version                string         `json:"version"`
-	Status                 string         `json:"status"`
-	ConfigurationSchema    map[string]any `json:"configuration_schema"`
-	DefaultConfiguration   map[string]any `json:"default_configuration"`
-	ComponentRegistryVersion string       `json:"component_registry_version"`
-	CreatedAt              time.Time      `json:"created_at"`
-	PublishedAt            *time.Time     `json:"published_at,omitempty"`
-	DeprecatedAt          *time.Time     `json:"deprecated_at,omitempty"`
+	ID                       string         `json:"id"`
+	ThemeID                  string         `json:"theme_id"`
+	Version                  string         `json:"version"`
+	Status                   string         `json:"status"`
+	ConfigurationSchema      map[string]any `json:"configuration_schema"`
+	DefaultConfiguration     map[string]any `json:"default_configuration"`
+	ComponentRegistryVersion string         `json:"component_registry_version"`
+	CreatedAt                time.Time      `json:"created_at"`
+	PublishedAt              *time.Time     `json:"published_at,omitempty"`
+	DeprecatedAt             *time.Time     `json:"deprecated_at,omitempty"`
 }
 
 // ValidThemeVersionStatus reports whether s is a recognized theme version status.

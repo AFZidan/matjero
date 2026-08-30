@@ -15,7 +15,7 @@ import (
 // service is used only to resolve the authenticated principal's seller identity;
 // theme business logic lives in the themes package.
 type ThemeDependencies struct {
-	Themes  themes.Service
+	Themes   themes.Service
 	Commerce commerce.Service
 }
 
@@ -104,10 +104,10 @@ func (s themeServer) handleGetInstallation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, ThemeInstallationResponse{
-		Installation:     inst,
-		DraftConfig:      cfg.DraftConfig,
-		PublishedConfig:  cfg.PublishedConfig,
-		DraftRevision:    cfg.DraftRevision,
+		Installation:      inst,
+		DraftConfig:       cfg.DraftConfig,
+		PublishedConfig:   cfg.PublishedConfig,
+		DraftRevision:     cfg.DraftRevision,
 		PublishedRevision: cfg.PublishedRevision,
 	})
 }

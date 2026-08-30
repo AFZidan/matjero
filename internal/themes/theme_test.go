@@ -86,8 +86,8 @@ func TestRejectUnsafeContent(t *testing.T) {
 func TestRejectUnsafeContentAllowsSafe(t *testing.T) {
 	safe := map[string]any{
 		"hero": map[string]any{
-			"title":    "Summer Sale",
-			"cta_url":  "https://example.com/sale",
+			"title":     "Summer Sale",
+			"cta_url":   "https://example.com/sale",
 			"image_url": "https://cdn.example.com/hero.png",
 		},
 		"colors": map[string]any{"primary": "#0f766e"},

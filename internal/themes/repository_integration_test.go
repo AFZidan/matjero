@@ -16,10 +16,10 @@ import (
 )
 
 type themesTestEnv struct {
-	ctx    context.Context
-	pool   *database.Pool
-	repo   Repository
-	svc    Service
+	ctx     context.Context
+	pool    *database.Pool
+	repo    Repository
+	svc     Service
 	sellerA string
 	sellerB string
 	storeA  string

@@ -16,8 +16,8 @@ const (
 
 // ThemeStatus enumerates the lifecycle state of a theme definition.
 const (
-	ThemeStatusDraft     = "draft"
-	ThemeStatusActive    = "active"
+	ThemeStatusDraft      = "draft"
+	ThemeStatusActive     = "active"
 	ThemeStatusDeprecated = "deprecated"
 	ThemeStatusDisabled   = "disabled"
 )

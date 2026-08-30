@@ -11,10 +11,10 @@ import (
 // future Theme Marketplace here.
 
 const (
-	DefaultThemeKey                = "matjero-default"
-	DefaultThemeName               = "Matjero Default"
-	DefaultThemeDescription        = "Platform-controlled default storefront theme."
-	DefaultThemeVersion            = "1.0.0"
+	DefaultThemeKey                 = "matjero-default"
+	DefaultThemeName                = "Matjero Default"
+	DefaultThemeDescription         = "Platform-controlled default storefront theme."
+	DefaultThemeVersion             = "1.0.0"
 	DefaultComponentRegistryVersion = "1.0.0"
 )
 
@@ -39,10 +39,10 @@ var DefaultConfigurationSchema = map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
-				"primary":   map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
-				"secondary": map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+				"primary":    map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+				"secondary":  map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
 				"background": map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
-				"text":      map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+				"text":       map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
 			},
 		},
 		"typography": map[string]any{
@@ -57,10 +57,10 @@ var DefaultConfigurationSchema = map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,
 			"properties": map[string]any{
-				"enabled":        map[string]any{"type": "boolean"},
-				"text":           map[string]any{"type": "string", "maxLength": 256},
+				"enabled":          map[string]any{"type": "boolean"},
+				"text":             map[string]any{"type": "string", "maxLength": 256},
 				"background_color": map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
-				"text_color":      map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
+				"text_color":       map[string]any{"type": "string", "pattern": "^#[0-9a-fA-F]{6}$"},
 			},
 		},
 		"header": map[string]any{
@@ -121,20 +121,20 @@ var DefaultConfiguration = map[string]any{
 	"logo":    "",
 	"favicon": "",
 	"colors": map[string]any{
-		"primary":   "#0f766e",
-		"secondary": "#0d9488",
+		"primary":    "#0f766e",
+		"secondary":  "#0d9488",
 		"background": "#ffffff",
-		"text":      "#0f172a",
+		"text":       "#0f172a",
 	},
 	"typography": map[string]any{
 		"font_family": "Inter, system-ui, sans-serif",
 		"base_size":   "medium",
 	},
 	"announcement_bar": map[string]any{
-		"enabled":         false,
-		"text":            "",
+		"enabled":          false,
+		"text":             "",
 		"background_color": "#0f766e",
-		"text_color":      "#ffffff",
+		"text_color":       "#ffffff",
 	},
 	"header": map[string]any{
 		"layout":      "classic",
