@@ -612,17 +612,17 @@ func (r Repository) AdjustInventory(ctx context.Context, snapshotID string, quan
 			return translatePGError(err, "record inventory movement")
 		}
 		movement = InventoryMovement{
-			ID:                 movementID,
+			ID:                  movementID,
 			InventorySnapshotID: snapshotID,
-			MovementType:       movementType,
-			QuantityDelta:      quantityDelta,
-			OnHandQty:          updated.OnHandQty,
-			ReservedQty:        updated.ReservedQty,
-			Reason:             reason,
-			PrincipalSubject:   principalSubject,
-			CorrelationID:      correlationID,
-			CausationID:        causationID,
-			CreatedAt:          movement.CreatedAt,
+			MovementType:        movementType,
+			QuantityDelta:       quantityDelta,
+			OnHandQty:           updated.OnHandQty,
+			ReservedQty:         updated.ReservedQty,
+			Reason:              reason,
+			PrincipalSubject:    principalSubject,
+			CorrelationID:       correlationID,
+			CausationID:         causationID,
+			CreatedAt:           movement.CreatedAt,
 		}
 		return nil
 	})
@@ -988,4 +988,37 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// StoreDomainResolution is the joined store + domain record resolved from a
+// trusted domain-to-store mapping. It is the source of tenant identity for the
+// public storefront.
+type StoreDomainResolution struct {
+	Store       Store
+	StoreDomain StoreDomain
+}
+
+// GetStoreByDomain resolves a normalized domain to its owning store and domain
+// record. Returns ErrNotFound when no active mapping exists.
+func (r Repository) GetStoreByDomain(ctx context.Context, domain string) (StoreDomainResolution, error) {
+	if domain == "" {
+		return StoreDomainResolution{}, ErrInvalidInput
+	}
+
+	var res StoreDomainResolution
+	err := r.pool.QueryRow(ctx, `
+		SELECT
+			s.id, s.seller_id, s.market_code, s.code, s.name, s.status, s.created_at, s.updated_at,
+			d.id, d.store_id, d.domain, d.is_primary, d.verified_at, d.status, d.domain_type, d.verification_token, d.last_checked_at, d.created_at, d.updated_at
+		FROM store_domains d
+		JOIN stores s ON s.id = d.store_id
+		WHERE d.domain = $1
+	`, domain).Scan(
+		&res.Store.ID, &res.Store.SellerID, &res.Store.MarketCode, &res.Store.Code, &res.Store.Name, &res.Store.Status, &res.Store.CreatedAt, &res.Store.UpdatedAt,
+		&res.StoreDomain.ID, &res.StoreDomain.StoreID, &res.StoreDomain.Domain, &res.StoreDomain.IsPrimary, &res.StoreDomain.VerifiedAt, &res.StoreDomain.Status, &res.StoreDomain.DomainType, &res.StoreDomain.VerificationToken, &res.StoreDomain.LastCheckedAt, &res.StoreDomain.CreatedAt, &res.StoreDomain.UpdatedAt,
+	)
+	if err != nil {
+		return StoreDomainResolution{}, translatePGError(err, "get store by domain")
+	}
+	return res, nil
 }

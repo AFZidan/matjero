@@ -3,11 +3,20 @@ package commerce
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
 type Service struct {
 	repo Repository
+
+	// PlatformDomain is the base domain under which platform-generated store
+	// subdomains are allocated (e.g. "<store-code>.matjero.com"). When empty, no
+	// subdomain is auto-allocated at store creation.
+	PlatformDomain string
+	// ReservedSubdomains are store-code labels that may not be claimed by sellers
+	// because they are reserved for platform use.
+	ReservedSubdomains []string
 }
 
 func NewService(repo Repository) Service {
@@ -73,7 +82,48 @@ func (s Service) CreateStoreForSubject(ctx context.Context, subject, sellerID, m
 	if _, err := s.RequireSellerAccess(ctx, subject, sellerID); err != nil {
 		return Store{}, err
 	}
-	return s.repo.CreateStore(ctx, sellerID, marketCode, code, name, status, settings)
+
+	// No platform domain configured: create the store without an auto-allocated
+	// subdomain.
+	if s.PlatformDomain == "" {
+		return s.repo.CreateStore(ctx, sellerID, marketCode, code, name, status, settings)
+	}
+
+	// Validate the reserved subdomain before any database write. The platform
+	// subdomain is derived from the store code, so a reserved code must be
+	// rejected up front.
+	normalizedCode := strings.ToLower(strings.TrimSpace(code))
+	for _, reserved := range s.ReservedSubdomains {
+		if normalizedCode == strings.ToLower(strings.TrimSpace(reserved)) {
+			return Store{}, ErrInvalidInput
+		}
+	}
+
+	subdomain, err := NormalizeDomain(fmt.Sprintf("%s.%s", normalizedCode, s.PlatformDomain))
+	if err != nil {
+		return Store{}, ErrInvalidInput
+	}
+
+	now := time.Now()
+	store, _, err := s.repo.CreateStoreWithDomain(ctx, sellerID, marketCode, code, name, status, settings, subdomain, "platform", "active", true, &now, nil)
+	if err != nil {
+		return Store{}, err
+	}
+	return store, nil
+}
+
+// RequestCustomStoreDomain registers a seller-supplied custom domain for a store
+// in the PENDING lifecycle state. Authorization is enforced via the store's
+// owning seller.
+func (s Service) RequestCustomStoreDomain(ctx context.Context, subject, storeID, domain string) (StoreDomain, error) {
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return StoreDomain{}, err
+	}
+	if _, err := s.RequireSellerAccess(ctx, subject, store.SellerID); err != nil {
+		return StoreDomain{}, err
+	}
+	return s.repo.CreateCustomStoreDomain(ctx, storeID, domain)
 }
 
 func (s Service) CreateFulfillmentLocationForSubject(ctx context.Context, subject, supplierID, supplierMarketID, marketCode, code, name, locationType, status string) (FulfillmentLocation, error) {

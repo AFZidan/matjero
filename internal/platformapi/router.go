@@ -219,7 +219,9 @@ func (deps Dependencies) handleAdminLocations(w http.ResponseWriter, r *http.Req
 }
 
 func (deps Dependencies) handleAdminSupplierStatus(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Status string `json:"status"` }
+	var body struct {
+		Status string `json:"status"`
+	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
@@ -231,7 +233,9 @@ func (deps Dependencies) handleAdminSupplierStatus(w http.ResponseWriter, r *htt
 }
 
 func (deps Dependencies) handleAdminSellerStatus(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Status string `json:"status"` }
+	var body struct {
+		Status string `json:"status"`
+	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}
@@ -242,12 +246,24 @@ func (deps Dependencies) handleAdminSellerStatus(w http.ResponseWriter, r *http.
 	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": body.Status})
 }
 
-func (deps Dependencies) handleAdminStoreStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateStoreStatus) }
-func (deps Dependencies) handleAdminProductStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateProductStatus) }
-func (deps Dependencies) handleAdminCategoryStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateCategoryStatus) }
-func (deps Dependencies) handleAdminOfferStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateSupplierOfferStatus) }
-func (deps Dependencies) handleAdminListingStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateSellerListingStatus) }
-func (deps Dependencies) handleAdminLocationStatus(w http.ResponseWriter, r *http.Request) { updateStatusHandler(w, r, deps.Repo.UpdateFulfillmentLocationStatus) }
+func (deps Dependencies) handleAdminStoreStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateStoreStatus)
+}
+func (deps Dependencies) handleAdminProductStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateProductStatus)
+}
+func (deps Dependencies) handleAdminCategoryStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateCategoryStatus)
+}
+func (deps Dependencies) handleAdminOfferStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateSupplierOfferStatus)
+}
+func (deps Dependencies) handleAdminListingStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateSellerListingStatus)
+}
+func (deps Dependencies) handleAdminLocationStatus(w http.ResponseWriter, r *http.Request) {
+	updateStatusHandler(w, r, deps.Repo.UpdateFulfillmentLocationStatus)
+}
 
 func (deps Dependencies) handleSupplierProfile(w http.ResponseWriter, r *http.Request) {
 	subject, err := subjectFrom(r)
@@ -389,8 +405,8 @@ func (deps Dependencies) handleSupplierProductCreate(w http.ResponseWriter, r *h
 		return
 	}
 	var body struct {
-		Slug        string              `json:"slug"`
-		Status      string              `json:"status"`
+		Slug         string             `json:"slug"`
+		Status       string             `json:"status"`
 		SupplierCode string             `json:"supplier_code"`
 		Translations []translationInput `json:"translations"`
 		CategoryIDs  []string           `json:"category_ids"`
@@ -484,10 +500,10 @@ func (deps Dependencies) handleSupplierOfferCreate(w http.ResponseWriter, r *htt
 		return
 	}
 	var body struct {
-		SupplierProductID string `json:"supplier_product_id"`
-		SupplierMarketID  string `json:"supplier_market_id"`
-		MarketCode        string `json:"market_code"`
-		Status            string `json:"status"`
+		SupplierProductID string       `json:"supplier_product_id"`
+		SupplierMarketID  string       `json:"supplier_market_id"`
+		MarketCode        string       `json:"market_code"`
+		Status            string       `json:"status"`
 		Price             *money.Money `json:"price"`
 		IsAvailable       *bool        `json:"is_available"`
 		AvailableQty      *int64       `json:"available_qty"`
@@ -543,8 +559,8 @@ func (deps Dependencies) handleSupplierInventorySnapshotCreate(w http.ResponseWr
 	}
 	var body struct {
 		FulfillmentLocationID string `json:"fulfillment_location_id"`
-		SKUID                string `json:"sku_id"`
-		OnHandQty            int64  `json:"on_hand_qty"`
+		SKUID                 string `json:"sku_id"`
+		OnHandQty             int64  `json:"on_hand_qty"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -789,11 +805,11 @@ func (deps Dependencies) handleSellerListingImport(w http.ResponseWriter, r *htt
 		return
 	}
 	var body struct {
-		StoreID        string  `json:"store_id"`
-		ProductID      string  `json:"product_id"`
+		StoreID         string  `json:"store_id"`
+		ProductID       string  `json:"product_id"`
 		SupplierOfferID *string `json:"supplier_offer_id"`
-		Status         string  `json:"status"`
-		MarketCode     string  `json:"market_code"`
+		Status          string  `json:"status"`
+		MarketCode      string  `json:"market_code"`
 	}
 	if !decodeJSON(w, r, &body) {
 		return
@@ -846,7 +862,9 @@ type translationInput struct {
 }
 
 func updateStatusHandler(w http.ResponseWriter, r *http.Request, fn func(context.Context, string, string) error) {
-	var body struct{ Status string `json:"status"` }
+	var body struct {
+		Status string `json:"status"`
+	}
 	if !decodeJSON(w, r, &body) {
 		return
 	}

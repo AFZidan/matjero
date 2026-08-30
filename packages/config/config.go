@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -18,6 +19,18 @@ type Config struct {
 	ZitadelAudience    string
 	OpenAPIDocsEnabled bool
 	ShutdownTimeout    time.Duration
+
+	// PlatformDomain is the base domain under which platform-generated store
+	// subdomains are allocated (e.g. "<store-code>.matjero.com"). It is
+	// configuration-driven and never hardcoded in application code.
+	PlatformDomain string
+	// TrustedForwardedHost enables honoring the X-Forwarded-Host header for
+	// tenant resolution. It must only be enabled behind an explicitly trusted
+	// reverse proxy; otherwise the request Host header is authoritative.
+	TrustedForwardedHost bool
+	// ReservedSubdomains are subdomain labels that sellers may not claim as a
+	// store code (e.g. www, api, admin).
+	ReservedSubdomains []string
 }
 
 func Load(serviceName string) (Config, error) {
@@ -31,17 +44,42 @@ func Load(serviceName string) (Config, error) {
 	}
 
 	return Config{
-		ServiceName:        serviceName,
-		Environment:        stringEnv("APP_ENV", "development"),
-		HTTPAddr:           stringEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:        stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
-		RedisAddr:          stringEnv("REDIS_ADDR", "localhost:6379"),
-		RabbitMQURL:        stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
-		ZitadelIssuer:      stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
-		ZitadelAudience:    stringEnv("ZITADEL_AUDIENCE", serviceName),
-		OpenAPIDocsEnabled: boolEnv("OPENAPI_DOCS_ENABLED", stringEnv("APP_ENV", "development") != "production"),
-		ShutdownTimeout:    time.Duration(timeoutSeconds) * time.Second,
+		ServiceName:          serviceName,
+		Environment:          stringEnv("APP_ENV", "development"),
+		HTTPAddr:             stringEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:          stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
+		RedisAddr:            stringEnv("REDIS_ADDR", "localhost:6379"),
+		RabbitMQURL:          stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
+		ZitadelIssuer:        stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
+		ZitadelAudience:      stringEnv("ZITADEL_AUDIENCE", serviceName),
+		OpenAPIDocsEnabled:   boolEnv("OPENAPI_DOCS_ENABLED", stringEnv("APP_ENV", "development") != "production"),
+		ShutdownTimeout:      time.Duration(timeoutSeconds) * time.Second,
+		PlatformDomain:       stringEnv("PLATFORM_DOMAIN", "matjero.com"),
+		TrustedForwardedHost: boolEnv("TRUSTED_FORWARDED_HOST", false),
+		ReservedSubdomains:   stringSliceEnv("RESERVED_SUBDOMAINS", []string{"www", "api", "admin", "app", "cdn", "mail", "seller", "supplier", "static", "assets"}),
 	}, nil
+}
+
+// stringSliceEnv reads a comma-separated environment variable, trimming
+// whitespace from each entry and dropping empty values.
+func stringSliceEnv(key string, fallback []string) []string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
 }
 
 func stringEnv(key, fallback string) string {
