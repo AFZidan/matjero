@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"matjero/packages/config"
+	"github.com/AFZidan/matjero-core/packages/config"
 )
 
 type Pool struct {

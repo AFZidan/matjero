@@ -5,7 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-ARG APP_PATH=./apps/admin-api
+ARG APP_PATH=./apps/workers/general-worker
 RUN go build -o /out/app ${APP_PATH}
 
 FROM alpine:3.22

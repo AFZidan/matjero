@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"matjero/packages/events"
+	"github.com/AFZidan/matjero-core/packages/events"
 )
 
 type Store struct{}

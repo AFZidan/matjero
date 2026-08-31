@@ -7,9 +7,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"matjero/packages/config"
-	"matjero/packages/logging"
-	"matjero/packages/observability"
+	"github.com/AFZidan/matjero-core/packages/config"
+	"github.com/AFZidan/matjero-core/packages/logging"
+	"github.com/AFZidan/matjero-core/packages/observability"
 )
 
 func main() {

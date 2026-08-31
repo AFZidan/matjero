@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"matjero/packages/config"
+	"github.com/AFZidan/matjero-core/packages/config"
 )
 
 func New(cfg config.Config) *slog.Logger {
