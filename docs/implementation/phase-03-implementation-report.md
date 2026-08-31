@@ -144,12 +144,12 @@ GitHub CI for the final completion PR passed on August 30, 2026 for:
   - Purpose: Phase 3 implementation specification
   - Result: spec documented and committed
 - Branch: `feature/p3-actor-platform-foundations`
-  - PR: `https://github.com/AFZidan/matjero/pull/2`
+  - PR: `https://github.com/matjeroapps/core/pull/2`
   - Commit(s): `d8f36f3`, `dfd8e59`, `bed6958`, `c5479e0`
   - Purpose: actor APIs, commerce repository extensions, dashboards, and migrations
   - Result: completed and included in the final PR
 - Branch: `feature/p3-phase-completion`
-  - PR: `https://github.com/AFZidan/matjero/pull/2`
+  - PR: `https://github.com/matjeroapps/core/pull/2`
   - Commit(s): `d8f36f3`, `dfd8e59`, `bed6958`, `c5479e0`
   - Purpose: final packaging and release report
   - Result: merged-ready branch with green CI

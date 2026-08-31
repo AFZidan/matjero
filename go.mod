@@ -1,4 +1,4 @@
-module matjero
+module github.com/matjeroapps/core
 
 go 1.26
 
