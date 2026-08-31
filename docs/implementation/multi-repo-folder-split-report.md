@@ -412,20 +412,16 @@ extracted baseline, with provenance recorded in the commit body (source
 repository, source split PR #9, pre-extraction baseline SHA, and the Core
 dependency revision).
 
-Remaining sequence:
+That sequence is now complete. All five siblings are pushed, each code-bearing
+sibling pins Core at pseudo-version `v0.0.0-20260831221729-6a3a841a5736` with no
+committed `replace` directive, every actor CI is green, and fresh clones build
+without the workspace. The outcome is recorded in
+[`multi-repo-publication-report.md`](multi-repo-publication-report.md).
 
-1. Core PR #9 merges into `matjeroapps/core/main` (manual merge, never
-   automatic).
-2. Each sibling pins the merged Core revision — a `v0.1.0` tag when available,
-   otherwise the pseudo-version for the merged commit. No committed `replace`
-   directives, ever.
-3. Each code-bearing sibling gets its own GitHub Actions CI covering Go build /
-   vet / test / gofmt, OpenAPI generation plus a stale-spec check, frontend
-   lint / typecheck / test / build, and security (`go list -m all`, `npm audit`,
-   gitleaks).
-4. Hub repositories stay README-only until connector work begins; no fabricated
+Two invariants continue to apply:
+
+1. Hub repositories stay README-only until connector work begins; no fabricated
    application CI is added for them.
-5. Contributors keep the untracked `go.work` at the workspace root,
-   `/var/www/personal/matjero/`, for local cross-repository development. It is
-   git-ignored and must never be committed.
+2. Contributors keep the untracked `go.work` at the workspace root for local
+   cross-repository development. It is git-ignored and must never be committed.
 
