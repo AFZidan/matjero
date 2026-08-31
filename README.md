@@ -7,14 +7,16 @@ depends on.
 
 ## Repository boundaries
 
-| Repository | Owns |
-| --- | --- |
-| `matjero-core` (this repo) | Commerce/theme/market/storefront domain logic, shared `packages/*`, centralized `migrations/`, background workers, local infrastructure |
-| `matjero-admin` | Admin API, admin OpenAPI document, admin dashboard |
-| `matjero-seller` | Seller API + Storefront API, theme HTTP surface, seller dashboard, storefront web app |
-| `matjero-supplier` | Supplier API, supplier OpenAPI document, supplier dashboard |
-| `matjero-supplier-integrations` | Supplier-side provider adapters (not implemented yet) |
-| `matjero-seller-integrations` | Seller-side channel adapters (not implemented yet) |
+| Local folder | GitHub repository | Owns |
+| --- | --- | --- |
+| `core` (this repo) | [`matjeroapps/core`](https://github.com/matjeroapps/core) | Commerce/theme/market/storefront domain logic, shared `packages/*`, centralized `migrations/`, background workers, local infrastructure |
+| `admin` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) | Admin API, admin OpenAPI document, admin dashboard |
+| `seller` | [`matjeroapps/seller`](https://github.com/matjeroapps/seller) | Seller API + Storefront API, theme HTTP surface, seller dashboard, storefront web app |
+| `supplier` | [`matjeroapps/supplier`](https://github.com/matjeroapps/supplier) | Supplier API, supplier OpenAPI document, supplier dashboard |
+| `supplier-hub` | [`matjeroapps/supplier-hub`](https://github.com/matjeroapps/supplier-hub) | Supplier-side external commerce integration/connectors (not implemented yet) |
+| `seller-hub` | [`matjeroapps/seller-hub`](https://github.com/matjeroapps/seller-hub) | Seller-side external store integration/connectors (not implemented yet) |
+
+"Hub" denotes a connector/integration boundary, not a dashboard.
 
 All database migrations live here, in `migrations/`. No other repository owns
 migrations.
@@ -25,6 +27,23 @@ Actor repositories consume Core only through its public packages
 `internal/` is private to Core.
 
 ## Local Development
+
+All six folders are checked out side by side under a single workspace root:
+
+```
+/var/www/personal/matjero/
+├── core/
+├── admin/
+├── seller/
+├── supplier/
+├── seller-hub/
+├── supplier-hub/
+├── go.work
+└── go.work.sum
+```
+
+`go.work` and `go.work.sum` live at the workspace root, one level above every
+repository, and are deliberately never committed.
 
 ```sh
 cp .env.example .env

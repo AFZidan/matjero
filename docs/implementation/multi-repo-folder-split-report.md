@@ -2,13 +2,17 @@
 
 ## 1. Summary
 
-The monorepo was split into six sibling folders under `/var/www/personal/`, each
-ready to become an independent GitHub repository. The work was a **filesystem
-move plus minimal adaptation**, not a rewrite: every extracted Go file, web
-application file, and OpenAPI document originates from the monorepo at source
-SHA `8378f32590dba083050ac2b619ba5cbf511a38dd`.
+The monorepo was split into six sibling folders, each ready to become an
+independent GitHub repository. The work was a **filesystem move plus minimal
+adaptation**, not a rewrite: every extracted Go file, web application file, and
+OpenAPI document originates from the monorepo at source SHA
+`8378f32590dba083050ac2b619ba5cbf511a38dd`.
 
-| Folder | GitHub repository | Go module | Status |
+The table below records the folder names **as they were at the time of the
+split**. The folders have since been relocated into a single workspace root and
+renamed; see §1.1 for the current layout.
+
+| Folder at split time | GitHub repository | Go module | Status |
 | --- | --- | --- | --- |
 | `drop-shipping/` | [`matjeroapps/core`](https://github.com/matjeroapps/core) | `github.com/matjeroapps/core` | Code-bearing |
 | `matjero-admin/` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) | `github.com/matjeroapps/admin` | Code-bearing |
@@ -17,9 +21,29 @@ SHA `8378f32590dba083050ac2b619ba5cbf511a38dd`.
 | `matjero-supplier-integrations/` | [`matjeroapps/supplier-hub`](https://github.com/matjeroapps/supplier-hub) | — | README-only placeholder |
 | `matjero-seller-integrations/` | [`matjeroapps/seller-hub`](https://github.com/matjeroapps/seller-hub) | — | README-only placeholder |
 
-The `drop-shipping/` folder name is unchanged on disk; it is the historical
-repository, now published as `matjeroapps/core`, and its Go module path was
-renamed accordingly.
+At split time the `drop-shipping/` folder name was left unchanged on disk; it is
+the historical repository, now published as `matjeroapps/core`, and its Go module
+path was renamed accordingly.
+
+### 1.1 Current canonical local layout
+
+All six folders now live under one workspace root:
+
+```
+/var/www/personal/matjero/
+├── core/            → matjeroapps/core          (was drop-shipping/)
+├── admin/           → matjeroapps/admin         (was matjero-admin/)
+├── seller/          → matjeroapps/seller        (was matjero-seller/)
+├── supplier/        → matjeroapps/supplier      (was matjero-supplier/)
+├── seller-hub/      → matjeroapps/seller-hub    (was matjero-seller-integrations/)
+├── supplier-hub/    → matjeroapps/supplier-hub  (was matjero-supplier-integrations/)
+├── go.work
+└── go.work.sum
+```
+
+`supplier-hub` owns supplier-side external commerce integration/connectors and
+`seller-hub` owns seller-side external store integration/connectors. Neither is a
+dashboard.
 
 **Storefront** is owned by `matjeroapps/seller` (both the Storefront API and the
 Next.js storefront web app). **Infrastructure** and **shared contracts** stay in
@@ -229,34 +253,37 @@ Each sibling declares `require github.com/matjeroapps/core v0.0.0` and
 contains **no `replace` directive**, so nothing filesystem-specific leaks into a
 published `go.mod`.
 
-Local development uses an untracked `/var/www/personal/go.work` that lives
-outside every repository:
+Local development uses an untracked `go.work` at the workspace root,
+`/var/www/personal/matjero/go.work`, which lives outside every repository:
 
 ```
 go 1.26
 
 use (
-	./drop-shipping
-	./matjero-admin
-	./matjero-seller
-	./matjero-supplier
+	./core
+	./admin
+	./seller
+	./supplier
 )
 ```
+
+`seller-hub` and `supplier-hub` are intentionally absent: they contain no
+`go.mod` yet.
 
 Two resolution details worth recording:
 
 - While Core was still unpublished, the `go.work` replace **had to be
-  version-qualified**. `replace github.com/matjeroapps/core => ./drop-shipping`
+  version-qualified**. `replace github.com/matjeroapps/core => ./core`
   fails with `workspace module … is replaced at all versions in the go.work
-  file`; omitting the replace entirely failed with `Repository not found`. Once
-  Core is published to `matjeroapps/core` the replace is dropped and the `use`
-  directives alone are sufficient.
+  file`; omitting the replace entirely failed with `Repository not found`. Now
+  that Core is published to `matjeroapps/core` the replace is dropped and the
+  `use` directives alone are sufficient.
 - `go mod tidy` ignores `go.work` replaces for network resolution, so the
   indirect requires were populated with a temporary in-module replace that is
   then dropped:
 
   ```sh
-  go mod edit -replace github.com/matjeroapps/core=../drop-shipping
+  go mod edit -replace github.com/matjeroapps/core=../core
   GOWORK=off GOFLAGS=-mod=mod go mod tidy
   go mod edit -dropreplace github.com/matjeroapps/core
   ```
@@ -272,7 +299,7 @@ pseudo-version) and the `go.work` file becomes optional.
 
 | Module | `go build ./...` | `go vet ./...` | `gofmt -l .` | `go test ./...` |
 | --- | --- | --- | --- | --- |
-| `drop-shipping` (Core) | pass | pass | clean | pass |
+| `core` (Core) | pass | pass | clean | pass |
 | `matjeroapps/admin` | pass | pass | clean | pass |
 | `matjeroapps/seller` | pass | pass | clean | pass |
 | `matjeroapps/supplier` | pass | pass | clean | pass |
@@ -398,6 +425,7 @@ Remaining sequence:
    gitleaks).
 4. Hub repositories stay README-only until connector work begins; no fabricated
    application CI is added for them.
-5. Contributors keep the untracked `go.work` at `/var/www/personal/` for local
-   cross-repository development. It is git-ignored and must never be committed.
+5. Contributors keep the untracked `go.work` at the workspace root,
+   `/var/www/personal/matjero/`, for local cross-repository development. It is
+   git-ignored and must never be committed.
 

@@ -7,12 +7,29 @@
 > **Working branch:** `refactor/multi-repo-folder-split`
 > **Nature of change:** filesystem move + minimal adaptation. **Not** a rewrite. The
 > existing implementation at the source commit is the single source of truth.
+>
+> **Historical folder names.** This document records the folder names as planned at the
+> time of the split. The folders have since been relocated into one workspace root and
+> renamed. Current canonical layout:
+>
+> | Folder name in this document (historical) | Current local folder |
+> | --- | --- |
+> | `/var/www/personal/drop-shipping/` | `/var/www/personal/matjero/core/` |
+> | `/var/www/personal/matjero-admin/` | `/var/www/personal/matjero/admin/` |
+> | `/var/www/personal/matjero-seller/` | `/var/www/personal/matjero/seller/` |
+> | `/var/www/personal/matjero-supplier/` | `/var/www/personal/matjero/supplier/` |
+> | `/var/www/personal/matjero-seller-integrations/` | `/var/www/personal/matjero/seller-hub/` |
+> | `/var/www/personal/matjero-supplier-integrations/` | `/var/www/personal/matjero/supplier-hub/` |
+>
+> The workspace root — and therefore the location of the untracked `go.work` — is now
+> `/var/www/personal/matjero/`, not `/var/www/personal/`.
 
 ---
 
 ## 1. Target Folder Boundaries
 
-Six sibling folders under `/var/www/personal/`. Each becomes its own GitHub repository later.
+Six sibling folders, planned under `/var/www/personal/` (now `/var/www/personal/matjero/`,
+see the note above). Each becomes its own GitHub repository later.
 
 | Folder | GitHub repository | Module path | Contains code? |
 | --- | --- | --- | --- |
@@ -247,7 +264,7 @@ containing only its own web apps:
 | 1 | Module path `matjero` → `github.com/matjeroapps/{core,admin,seller,supplier,…}` | Six independent modules cannot share one bare module path. |
 | 2 | Import rewrite `matjero/internal/X` → `github.com/matjeroapps/core/pkg/X` in siblings | Siblings cannot import Core `internal/`. |
 | 3 | **`pkg/openapi/spec.go`: `schemaRefForType` hardcodes `t.PkgPath() == "matjero/packages/money"`** → must become `github.com/matjeroapps/core/packages/money` | Silent regression risk: an unchanged string makes the `Money` schema special-case fall through to struct reflection, changing every generated spec without any compile error. |
-| 4 | `/var/www/personal/go.work` for local multi-module development | Sibling folders are not yet published repos. Kept out of production config; no absolute local paths are baked into any `go.mod`. |
+| 4 | Workspace-root `go.work` (now `/var/www/personal/matjero/go.work`) for local multi-module development | Sibling folders are not yet published repos. Kept out of production config; no absolute local paths are baked into any `go.mod`. |
 | 5 | Each actor repo gets its own `scripts/check-locales.mjs` and its `web/*` `test` script path corrected | Today all four web `test` scripts invoke `node ../../scripts/check-locales.mjs`, reaching outside the workspace to the monorepo root — a path that does not exist after the split. |
 | 6 | `docker/web-app.Dockerfile` per repo: `COPY web/*/package.json` list reduced to that repo's workspaces | The current file copies all four web package.json files; three of them will not exist. |
 | 7 | `docker/go-app.Dockerfile` per repo: `APP_PATH` default retargeted | Default `./apps/admin-api` is invalid in seller/supplier/core. |
@@ -299,7 +316,7 @@ All previously SHARED / REQUIRES_DECISION items are resolved:
 3. Rewrite Core imports; fix the `packages/money` PkgPath string; `go build ./... && go vet ./... && go test ./...`.
 4. Create the five sibling folders with READMEs.
 5. Per actor: `rsync -a` copy → `find | wc -l` + `sha256sum` + `diff -qr` verification → write split files, `go.mod`, `package.json`, `Makefile`, Dockerfiles → build/vet/test.
-6. Create `/var/www/personal/go.work`.
+6. Create the workspace-root `go.work` (now at `/var/www/personal/matjero/go.work`).
 7. Delete originals from Core only after each destination validates.
 8. Duplicate-ownership audit.
 9. Rewrite Core `Makefile` + `.github/workflows/ci.yml` to Core-only scope.
