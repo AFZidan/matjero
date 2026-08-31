@@ -20,9 +20,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/AFZidan/matjero-core/packages/auth"
-	"github.com/AFZidan/matjero-core/packages/httpx"
-	"github.com/AFZidan/matjero-core/pkg/commerce"
+	"github.com/matjeroapps/core/packages/auth"
+	"github.com/matjeroapps/core/packages/httpx"
+	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 // Page carries the normalised pagination window parsed from a request.

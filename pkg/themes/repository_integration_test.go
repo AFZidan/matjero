@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/AFZidan/matjero-core/internal/testdb"
-	"github.com/AFZidan/matjero-core/packages/database"
-	"github.com/AFZidan/matjero-core/pkg/commerce"
+	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/packages/database"
+	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 type themesTestEnv struct {

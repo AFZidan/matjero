@@ -14,18 +14,18 @@
 
 Six sibling folders under `/var/www/personal/`. Each becomes its own GitHub repository later.
 
-| Folder | Logical repository | Module path | Contains code? |
+| Folder | GitHub repository | Module path | Contains code? |
 | --- | --- | --- | --- |
-| `drop-shipping/` | `matjero-core` (folder intentionally **not** renamed) | `github.com/AFZidan/matjero-core` | yes |
-| `matjero-admin/` | Admin Platform | `github.com/AFZidan/matjero-admin` | yes |
-| `matjero-seller/` | Seller Platform **+ Native Storefront** | `github.com/AFZidan/matjero-seller` | yes |
-| `matjero-supplier/` | Supplier Platform | `github.com/AFZidan/matjero-supplier` | yes |
-| `matjero-supplier-integrations/` | Supplier connectors | `github.com/AFZidan/matjero-supplier-integrations` | no — ownership placeholder |
-| `matjero-seller-integrations/` | Seller/channel connectors | `github.com/AFZidan/matjero-seller-integrations` | no — ownership placeholder |
+| `drop-shipping/` | [`matjeroapps/core`](https://github.com/matjeroapps/core) (folder intentionally **not** renamed) | `github.com/matjeroapps/core` | yes |
+| `matjero-admin/` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) — Admin Platform | `github.com/matjeroapps/admin` | yes |
+| `matjero-seller/` | [`matjeroapps/seller`](https://github.com/matjeroapps/seller) — Seller Platform **+ Native Storefront** | `github.com/matjeroapps/seller` | yes |
+| `matjero-supplier/` | [`matjeroapps/supplier`](https://github.com/matjeroapps/supplier) — Supplier Platform | `github.com/matjeroapps/supplier` | yes |
+| `matjero-supplier-integrations/` | [`matjeroapps/supplier-hub`](https://github.com/matjeroapps/supplier-hub) — Supplier connectors | `github.com/matjeroapps/supplier-hub` | no — ownership placeholder |
+| `matjero-seller-integrations/` | [`matjeroapps/seller-hub`](https://github.com/matjeroapps/seller-hub) — Seller/channel connectors | `github.com/matjeroapps/seller-hub` | no — ownership placeholder |
 
 Deliberately **no** separate repository for:
 
-- **Storefront** → belongs to `matjero-seller` (the storefront is a seller-owned surface).
+- **Storefront** → belongs to `matjeroapps/seller` (the storefront is a seller-owned surface).
 - **Infrastructure** → stays in Core (`docker-compose.yml`, `migrations/`, base Dockerfiles).
 - **Shared contracts** → stays in Core, exposed through a narrow public Go boundary.
 
@@ -244,9 +244,9 @@ containing only its own web apps:
 
 | # | Adaptation | Reason |
 | --- | --- | --- |
-| 1 | Module path `matjero` → `github.com/AFZidan/matjero-{core,admin,seller,supplier,…}` | Six independent modules cannot share one bare module path. |
-| 2 | Import rewrite `matjero/internal/X` → `github.com/AFZidan/matjero-core/pkg/X` in siblings | Siblings cannot import Core `internal/`. |
-| 3 | **`pkg/openapi/spec.go`: `schemaRefForType` hardcodes `t.PkgPath() == "matjero/packages/money"`** → must become `github.com/AFZidan/matjero-core/packages/money` | Silent regression risk: an unchanged string makes the `Money` schema special-case fall through to struct reflection, changing every generated spec without any compile error. |
+| 1 | Module path `matjero` → `github.com/matjeroapps/{core,admin,seller,supplier,…}` | Six independent modules cannot share one bare module path. |
+| 2 | Import rewrite `matjero/internal/X` → `github.com/matjeroapps/core/pkg/X` in siblings | Siblings cannot import Core `internal/`. |
+| 3 | **`pkg/openapi/spec.go`: `schemaRefForType` hardcodes `t.PkgPath() == "matjero/packages/money"`** → must become `github.com/matjeroapps/core/packages/money` | Silent regression risk: an unchanged string makes the `Money` schema special-case fall through to struct reflection, changing every generated spec without any compile error. |
 | 4 | `/var/www/personal/go.work` for local multi-module development | Sibling folders are not yet published repos. Kept out of production config; no absolute local paths are baked into any `go.mod`. |
 | 5 | Each actor repo gets its own `scripts/check-locales.mjs` and its `web/*` `test` script path corrected | Today all four web `test` scripts invoke `node ../../scripts/check-locales.mjs`, reaching outside the workspace to the monorepo root — a path that does not exist after the split. |
 | 6 | `docker/web-app.Dockerfile` per repo: `COPY web/*/package.json` list reduced to that repo's workspaces | The current file copies all four web package.json files; three of them will not exist. |

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AFZidan/matjero-core/internal/testdb"
-	"github.com/AFZidan/matjero-core/packages/database"
-	"github.com/AFZidan/matjero-core/packages/money"
+	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/packages/database"
+	"github.com/matjeroapps/core/packages/money"
 )
 
 func TestRepositoryCommerceFoundations(t *testing.T) {

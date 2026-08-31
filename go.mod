@@ -1,4 +1,4 @@
-module github.com/AFZidan/matjero-core
+module github.com/matjeroapps/core
 
 go 1.26
 

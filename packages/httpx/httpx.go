@@ -15,7 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	"github.com/AFZidan/matjero-core/packages/config"
+	"github.com/matjeroapps/core/packages/config"
 )
 
 type contextKey string

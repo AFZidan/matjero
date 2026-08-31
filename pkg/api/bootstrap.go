@@ -1,9 +1,9 @@
 package api
 
 import (
-	"github.com/AFZidan/matjero-core/packages/auth"
-	"github.com/AFZidan/matjero-core/packages/i18n"
-	"github.com/AFZidan/matjero-core/pkg/markets"
+	"github.com/matjeroapps/core/packages/auth"
+	"github.com/matjeroapps/core/packages/i18n"
+	"github.com/matjeroapps/core/pkg/markets"
 )
 
 type Bootstrap struct {

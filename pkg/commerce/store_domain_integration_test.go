@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AFZidan/matjero-core/internal/testdb"
-	"github.com/AFZidan/matjero-core/packages/database"
+	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/packages/database"
 )
 
 func applyStoreDomainMigrations(t *testing.T, db *database.Pool) {

@@ -9,7 +9,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
-	"github.com/AFZidan/matjero-core/packages/config"
+	"github.com/matjeroapps/core/packages/config"
 )
 
 type Shutdown func(context.Context) error

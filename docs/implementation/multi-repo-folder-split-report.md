@@ -8,19 +8,20 @@ move plus minimal adaptation**, not a rewrite: every extracted Go file, web
 application file, and OpenAPI document originates from the monorepo at source
 SHA `8378f32590dba083050ac2b619ba5cbf511a38dd`.
 
-| Folder | Logical repository | Go module | Status |
+| Folder | GitHub repository | Go module | Status |
 | --- | --- | --- | --- |
-| `drop-shipping/` | `matjero-core` | `github.com/AFZidan/matjero-core` | Code-bearing |
-| `matjero-admin/` | `matjero-admin` | `github.com/AFZidan/matjero-admin` | Code-bearing |
-| `matjero-seller/` | `matjero-seller` | `github.com/AFZidan/matjero-seller` | Code-bearing |
-| `matjero-supplier/` | `matjero-supplier` | `github.com/AFZidan/matjero-supplier` | Code-bearing |
-| `matjero-supplier-integrations/` | `matjero-supplier-integrations` | — | README-only placeholder |
-| `matjero-seller-integrations/` | `matjero-seller-integrations` | — | README-only placeholder |
+| `drop-shipping/` | [`matjeroapps/core`](https://github.com/matjeroapps/core) | `github.com/matjeroapps/core` | Code-bearing |
+| `matjero-admin/` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) | `github.com/matjeroapps/admin` | Code-bearing |
+| `matjero-seller/` | [`matjeroapps/seller`](https://github.com/matjeroapps/seller) | `github.com/matjeroapps/seller` | Code-bearing |
+| `matjero-supplier/` | [`matjeroapps/supplier`](https://github.com/matjeroapps/supplier) | `github.com/matjeroapps/supplier` | Code-bearing |
+| `matjero-supplier-integrations/` | [`matjeroapps/supplier-hub`](https://github.com/matjeroapps/supplier-hub) | — | README-only placeholder |
+| `matjero-seller-integrations/` | [`matjeroapps/seller-hub`](https://github.com/matjeroapps/seller-hub) | — | README-only placeholder |
 
-The `drop-shipping/` folder name is unchanged on disk; it is logically
-`matjero-core` and its Go module path was renamed accordingly.
+The `drop-shipping/` folder name is unchanged on disk; it is the historical
+repository, now published as `matjeroapps/core`, and its Go module path was
+renamed accordingly.
 
-**Storefront** is owned by `matjero-seller` (both the Storefront API and the
+**Storefront** is owned by `matjeroapps/seller` (both the Storefront API and the
 Next.js storefront web app). **Infrastructure** and **shared contracts** stay in
 Core. No separate storefront, infrastructure, or contracts repository was
 created.
@@ -29,7 +30,7 @@ created.
 
 - Source SHA: `8378f32590dba083050ac2b619ba5cbf511a38dd`
 - Branch: `refactor/multi-repo-folder-split`
-- Remote: `git@github.com:AFZidan/matjero.git`, base branch `main`
+- Remote: `git@github.com:matjeroapps/core.git`, base branch `main`
 - No `git init`, `git remote add`, or `gh repo create` was run in any sibling
   folder. The five sibling folders are plain directories with no git metadata.
 
@@ -96,18 +97,18 @@ and the per-actor documents live in each sibling.
 
 One value change was required inside `pkg/openapi/spec.go`: the money type's
 reflected `PkgPath` is now
-`github.com/AFZidan/matjero-core/packages/money`. This does not alter generated
+`github.com/matjeroapps/core/packages/money`. This does not alter generated
 output, which is proven byte-identical in section 8.
 
 ## 5. Core: module path change
 
 `go.mod` module line changed from bare `matjero` to
-`github.com/AFZidan/matjero-core`. The import path was rewritten across **42 Go
+`github.com/matjeroapps/core`. The import path was rewritten across **42 Go
 files**. No other semantic change accompanied the rewrite.
 
 ## 6. Extracted paths
 
-### `matjero-admin`
+### `matjeroapps/admin`
 
 | Destination | Origin in monorepo |
 | --- | --- |
@@ -122,7 +123,7 @@ files**. No other semantic change accompanied the rewrite.
 | `scripts/check-locales.mjs` | `scripts/check-locales.mjs` |
 | `docker/go-app.Dockerfile`, `docker/web-app.Dockerfile` | `docker/` |
 
-### `matjero-seller`
+### `matjeroapps/seller`
 
 | Destination | Origin in monorepo |
 | --- | --- |
@@ -138,7 +139,7 @@ files**. No other semantic change accompanied the rewrite.
 | `web/seller/` (8 files), `web/storefront/` (9 files) | same paths |
 | `scripts/check-locales.mjs`, `docker/` | same paths |
 
-### `matjero-supplier`
+### `matjeroapps/supplier`
 
 | Destination | Origin in monorepo |
 | --- | --- |
@@ -224,11 +225,12 @@ generated contract for every actor is unchanged down to the byte.
 
 ## 9. Cross-repository module resolution
 
-Each sibling declares `require github.com/AFZidan/matjero-core v0.0.0` and
+Each sibling declares `require github.com/matjeroapps/core v0.0.0` and
 contains **no `replace` directive**, so nothing filesystem-specific leaks into a
 published `go.mod`.
 
-Local development uses an untracked `/var/www/personal/go.work`:
+Local development uses an untracked `/var/www/personal/go.work` that lives
+outside every repository:
 
 ```
 go 1.26
@@ -239,31 +241,30 @@ use (
 	./matjero-seller
 	./matjero-supplier
 )
-
-replace github.com/AFZidan/matjero-core v0.0.0 => ./drop-shipping
 ```
 
 Two resolution details worth recording:
 
-- The `go.work` replace **must be version-qualified**. `replace
-  github.com/AFZidan/matjero-core => ./drop-shipping` fails with
-  `workspace module … is replaced at all versions in the go.work file`; omitting
-  the replace entirely fails with `Repository not found` because Core is not yet
-  published.
+- While Core was still unpublished, the `go.work` replace **had to be
+  version-qualified**. `replace github.com/matjeroapps/core => ./drop-shipping`
+  fails with `workspace module … is replaced at all versions in the go.work
+  file`; omitting the replace entirely failed with `Repository not found`. Once
+  Core is published to `matjeroapps/core` the replace is dropped and the `use`
+  directives alone are sufficient.
 - `go mod tidy` ignores `go.work` replaces for network resolution, so the
   indirect requires were populated with a temporary in-module replace that is
   then dropped:
 
   ```sh
-  go mod edit -replace github.com/AFZidan/matjero-core=../drop-shipping
+  go mod edit -replace github.com/matjeroapps/core=../drop-shipping
   GOWORK=off GOFLAGS=-mod=mod go mod tidy
-  go mod edit -dropreplace github.com/AFZidan/matjero-core
+  go mod edit -dropreplace github.com/matjeroapps/core
   ```
 
   Each sibling ended with 35 `// indirect` requires and no `replace`.
 
-Once Core is published, each sibling should pin a real Core version and the
-`go.work` file becomes optional.
+Once Core is published, each sibling pins a real Core version (tag or
+pseudo-version) and the `go.work` file becomes optional.
 
 ## 10. Validation results
 
@@ -272,9 +273,9 @@ Once Core is published, each sibling should pin a real Core version and the
 | Module | `go build ./...` | `go vet ./...` | `gofmt -l .` | `go test ./...` |
 | --- | --- | --- | --- | --- |
 | `drop-shipping` (Core) | pass | pass | clean | pass |
-| `matjero-admin` | pass | pass | clean | pass |
-| `matjero-seller` | pass | pass | clean | pass |
-| `matjero-supplier` | pass | pass | clean | pass |
+| `matjeroapps/admin` | pass | pass | clean | pass |
+| `matjeroapps/seller` | pass | pass | clean | pass |
+| `matjeroapps/supplier` | pass | pass | clean | pass |
 
 Core test packages green: `pkg/actorapi`, `pkg/commerce`, `pkg/markets`,
 `pkg/openapi`, `pkg/storefront`, `pkg/themes`,
@@ -284,9 +285,9 @@ Core test packages green: `pkg/actorapi`, `pkg/commerce`, `pkg/markets`,
 
 | Repository | `npm install` | `npm run lint` | `npm run typecheck` | `npm run test` |
 | --- | --- | --- | --- | --- |
-| `matjero-admin` | pass | pass | pass | pass (`admin: locale foundation ok`) |
-| `matjero-seller` | pass | pass | pass | pass |
-| `matjero-supplier` | pass | pass | pass | pass (`supplier: locale foundation ok`) |
+| `matjeroapps/admin` | pass | pass | pass | pass (`admin: locale foundation ok`) |
+| `matjeroapps/seller` | pass | pass | pass | pass |
+| `matjeroapps/supplier` | pass | pass | pass | pass (`supplier: locale foundation ok`) |
 
 The locale check resolves `../../scripts/check-locales.mjs` from inside each web
 workspace, which is why `scripts/check-locales.mjs` was copied into every
@@ -296,7 +297,7 @@ sibling.
 
 | Check | Result |
 | --- | --- |
-| Sibling imports of `matjero-core/internal/...` | none |
+| Sibling imports of `core/internal/...` | none |
 | Exported type defined in two places across Core + siblings | none (only `Dependencies`, once per sibling in its own actor package — three distinct types, no shared definition) |
 | Phase identifiers in production/runtime filenames | none (only historical `docs/implementation/phase-*.md`, which are documentation) |
 | Duplicated Go `package` clauses (heredoc artifact) | none |
@@ -340,7 +341,7 @@ sibling READMEs point at it.
   `000007_theme_engine_schema`. No sibling contains a migration file, and every
   sibling README states this explicitly.
 - **Theme domain stays in Core** (`pkg/themes`: domain, repository, validation,
-  persistence). `matjero-seller` owns only the theme HTTP surface, the dashboard
+  persistence). `matjeroapps/seller` owns only the theme HTTP surface, the dashboard
   screens, and storefront rendering. The `THEME_PREVIEW_SECRET` fail-closed 503
   `preview_unavailable` behavior is unchanged and documented in the seller
   README.
@@ -348,7 +349,7 @@ sibling READMEs point at it.
   Inventory, Order, Payment, and theme persistence.
 - **Runtime deployability preserved**: `seller-api`, `seller-web`,
   `storefront-api`, and `storefront-web` remain four separate build and run
-  targets inside `matjero-seller`.
+  targets inside `matjeroapps/seller`.
 
 ## 13. Change statistics (Core commit)
 
@@ -364,17 +365,39 @@ sibling READMEs point at it.
 The large deletion count reflects code moving out to siblings, not code being
 lost. Every deleted file has a validated destination.
 
-## 14. Next steps for repository creation
+## 14. Repository publication
 
-1. Create the six GitHub repositories.
-2. In each sibling folder: `git init`, add the remote, commit the extracted
-   tree, push. This was deliberately **not** done as part of this task.
-3. Tag and publish `matjero-core` so siblings can replace
-   `matjero-core v0.0.0` with a real version.
-4. Add a CI workflow to each sibling mirroring its `Makefile` targets
-   (`go-test`, `openapi-check`, `frontend-lint`, `frontend-typecheck`,
-   `frontend-test`).
-5. Until Core is published, contributors keep the untracked `go.work` at the
-   parent directory level. It must never be committed to any repository.
-6. Flesh out the two integration repositories when that work begins; they
-   currently document scope and dependency direction only.
+The six GitHub repositories now exist under the `matjeroapps` organization:
+
+| GitHub repository | Canonical Go module |
+| --- | --- |
+| <https://github.com/matjeroapps/core> | `github.com/matjeroapps/core` |
+| <https://github.com/matjeroapps/admin> | `github.com/matjeroapps/admin` |
+| <https://github.com/matjeroapps/seller> | `github.com/matjeroapps/seller` |
+| <https://github.com/matjeroapps/supplier> | `github.com/matjeroapps/supplier` |
+| <https://github.com/matjeroapps/supplier-hub> | — (no Go code yet) |
+| <https://github.com/matjeroapps/seller-hub> | — (no Go code yet) |
+
+Core is the historical repository: it was transferred from `AFZidan/matjero` to
+`matjeroapps/core` and retains all history and pull requests. The five sibling
+repositories were created empty and receive a single initial commit carrying the
+extracted baseline, with provenance recorded in the commit body (source
+repository, source split PR #9, pre-extraction baseline SHA, and the Core
+dependency revision).
+
+Remaining sequence:
+
+1. Core PR #9 merges into `matjeroapps/core/main` (manual merge, never
+   automatic).
+2. Each sibling pins the merged Core revision — a `v0.1.0` tag when available,
+   otherwise the pseudo-version for the merged commit. No committed `replace`
+   directives, ever.
+3. Each code-bearing sibling gets its own GitHub Actions CI covering Go build /
+   vet / test / gofmt, OpenAPI generation plus a stale-spec check, frontend
+   lint / typecheck / test / build, and security (`go list -m all`, `npm audit`,
+   gitleaks).
+4. Hub repositories stay README-only until connector work begins; no fabricated
+   application CI is added for them.
+5. Contributors keep the untracked `go.work` at `/var/www/personal/` for local
+   cross-repository development. It is git-ignored and must never be committed.
+

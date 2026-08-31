@@ -1,8 +1,8 @@
 package commerce
 
 import (
-	"github.com/AFZidan/matjero-core/packages/events"
-	"github.com/AFZidan/matjero-core/packages/money"
+	"github.com/matjeroapps/core/packages/events"
+	"github.com/matjeroapps/core/packages/money"
 )
 
 func (s Supplier) SearchPayload(marketCodes []string, translations []SearchTranslation) SupplierSearchPayload {

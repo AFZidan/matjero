@@ -7,7 +7,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
-	"github.com/AFZidan/matjero-core/packages/events"
+	"github.com/matjeroapps/core/packages/events"
 )
 
 type Publisher interface {

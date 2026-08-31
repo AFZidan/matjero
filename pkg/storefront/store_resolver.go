@@ -10,7 +10,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/AFZidan/matjero-core/pkg/commerce"
+	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 // ResolvedStore is the tenant context derived from a trusted storefront domain.

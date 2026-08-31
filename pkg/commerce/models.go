@@ -3,7 +3,7 @@ package commerce
 import (
 	"time"
 
-	"github.com/AFZidan/matjero-core/packages/money"
+	"github.com/matjeroapps/core/packages/money"
 )
 
 type Supplier struct {

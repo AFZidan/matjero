@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/AFZidan/matjero-core/packages/i18n"
+	"github.com/matjeroapps/core/packages/i18n"
 )
 
 type Repository struct {

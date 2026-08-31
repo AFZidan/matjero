@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/AFZidan/matjero-core/internal/testdb"
-	"github.com/AFZidan/matjero-core/packages/database"
-	"github.com/AFZidan/matjero-core/packages/i18n"
+	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/packages/database"
+	"github.com/matjeroapps/core/packages/i18n"
 )
 
 func TestRepositoryReadsSeededMarkets(t *testing.T) {

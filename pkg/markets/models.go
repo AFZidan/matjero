@@ -3,7 +3,7 @@ package markets
 import (
 	"encoding/json"
 
-	"github.com/AFZidan/matjero-core/packages/i18n"
+	"github.com/matjeroapps/core/packages/i18n"
 )
 
 type Country struct {
