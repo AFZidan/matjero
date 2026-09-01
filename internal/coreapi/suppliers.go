@@ -149,10 +149,9 @@ func (s *server) handleListSupplierProducts(w http.ResponseWriter, r *http.Reque
 // handleCreateSupplierProduct creates the global product, its translations, the
 // supplier binding, and the category assignments.
 //
-// The sequence matches the supplier API's existing behaviour exactly: the
-// product is created first, translations are upserted, the supplier binding is
-// created through the ownership-enforcing service method, and categories are
-// assigned last.
+// The whole sequence is one atomic Core operation: a failure at any step leaves
+// no rows behind, so a caller can never observe a product without its supplier
+// binding or without its categories.
 func (s *server) handleCreateSupplierProduct(w http.ResponseWriter, r *http.Request) {
 	subject, supplierID, ok := s.authorizeSupplierSubject(w, r)
 	if !ok {
@@ -163,32 +162,25 @@ func (s *server) handleCreateSupplierProduct(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	product, err := s.deps.Repo.CreateProduct(r.Context(), body.Slug, body.Status)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
+	translations := make([]commerce.ProductTranslation, 0, len(body.Translations))
 	for _, translation := range body.Translations {
-		if err := s.deps.Repo.UpsertProductTranslation(r.Context(), commerce.ProductTranslation{
-			ProductID:   product.ID,
+		translations = append(translations, commerce.ProductTranslation{
 			Locale:      translation.Locale,
 			Name:        translation.Name,
 			Description: translation.Description,
-		}); err != nil {
-			writeDomainError(w, err)
-			return
-		}
+		})
 	}
-	supplierProduct, err := s.deps.Commerce.CreateSupplierProductForSubject(r.Context(), subject, supplierID, product.ID, body.SupplierCode, body.Status)
+
+	product, supplierProduct, err := s.deps.Commerce.CreateSupplierProductWithDetailsForSubject(r.Context(), subject, supplierID, commerce.ProductDraft{
+		Slug:         body.Slug,
+		Status:       body.Status,
+		SupplierCode: body.SupplierCode,
+		Translations: translations,
+		CategoryIDs:  body.CategoryIDs,
+	})
 	if err != nil {
 		writeDomainError(w, err)
 		return
-	}
-	if len(body.CategoryIDs) > 0 {
-		if err := s.deps.Repo.SetProductCategories(r.Context(), product.ID, body.CategoryIDs); err != nil {
-			writeDomainError(w, err)
-			return
-		}
 	}
 	httpx.WriteJSON(w, http.StatusCreated, ProductCreateResponse{Product: product, SupplierProduct: supplierProduct})
 }
@@ -222,8 +214,11 @@ func (s *server) handleListSupplierOffers(w http.ResponseWriter, r *http.Request
 	httpx.WriteJSON(w, http.StatusOK, CollectionResponse[commerce.SupplierOffer]{Items: items})
 }
 
-// handleCreateSupplierOffer creates an offer and optionally seeds its price and
-// availability, matching the supplier API's existing two-step behaviour.
+// handleCreateSupplierOffer creates an offer together with its optional price and
+// availability.
+//
+// The three writes are one atomic Core operation, so an offer is never left
+// unpriced or without availability because a later step failed.
 func (s *server) handleCreateSupplierOffer(w http.ResponseWriter, r *http.Request) {
 	subject, supplierID, ok := s.authorizeSupplierSubject(w, r)
 	if !ok {
@@ -234,10 +229,13 @@ func (s *server) handleCreateSupplierOffer(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	offer, err := s.deps.Commerce.CreateSupplierOfferForSubject(r.Context(), subject, supplierID, body.SupplierProductID, body.SupplierMarketID, body.MarketCode, body.Status)
-	if err != nil {
-		writeDomainError(w, err)
-		return
+	draft := commerce.OfferDraft{
+		SupplierProductID: body.SupplierProductID,
+		SupplierMarketID:  body.SupplierMarketID,
+		MarketCode:        body.MarketCode,
+		Status:            body.Status,
+		IsAvailable:       body.IsAvailable,
+		AvailableQty:      body.AvailableQty,
 	}
 	if body.Price != nil {
 		price, err := money.New(body.Price.AmountMinor, body.Price.Currency)
@@ -245,17 +243,13 @@ func (s *server) handleCreateSupplierOffer(w http.ResponseWriter, r *http.Reques
 			writeError(w, CodeValidationError)
 			return
 		}
-		if _, err := s.deps.Repo.SetSupplierOfferPrice(r.Context(), offer.ID, price); err != nil {
-			writeDomainError(w, err)
-			return
-		}
+		draft.Price = &price
 	}
-	if body.IsAvailable != nil || body.AvailableQty != nil {
-		isAvailable := body.IsAvailable != nil && *body.IsAvailable
-		if _, err := s.deps.Repo.SetSupplierOfferAvailability(r.Context(), offer.ID, isAvailable, body.AvailableQty); err != nil {
-			writeDomainError(w, err)
-			return
-		}
+
+	offer, err := s.deps.Commerce.CreateSupplierOfferWithDetailsForSubject(r.Context(), subject, supplierID, draft)
+	if err != nil {
+		writeDomainError(w, err)
+		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, offer)
 }

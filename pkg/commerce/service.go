@@ -140,6 +140,19 @@ func (s Service) CreateSupplierProductForSubject(ctx context.Context, subject, s
 	return s.repo.CreateSupplierProduct(ctx, supplierID, productID, supplierCode, status)
 }
 
+// CreateSupplierProductWithDetailsForSubject creates a product, its translations,
+// the supplier binding and the category assignments as one atomic operation.
+//
+// Callers that build these rows through separate repository calls can leave a
+// product with no supplier binding, or a binding with no categories, when a later
+// step fails. This method cannot.
+func (s Service) CreateSupplierProductWithDetailsForSubject(ctx context.Context, subject, supplierID string, draft ProductDraft) (Product, SupplierProduct, error) {
+	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
+		return Product{}, SupplierProduct{}, err
+	}
+	return s.repo.CreateSupplierProductAtomically(ctx, supplierID, draft)
+}
+
 func (s Service) CreateSupplierOfferForSubject(ctx context.Context, subject, supplierID, supplierProductID, supplierMarketID, marketCode, status string) (SupplierOffer, error) {
 	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
 		return SupplierOffer{}, err
@@ -159,6 +172,30 @@ func (s Service) CreateSupplierOfferForSubject(ctx context.Context, subject, sup
 		return SupplierOffer{}, ErrMarketMismatch
 	}
 	return s.repo.CreateSupplierOffer(ctx, supplierID, supplierProductID, supplierMarketID, marketCode, status)
+}
+
+// CreateSupplierOfferWithDetailsForSubject creates an offer together with its
+// price and availability as one atomic operation, so an offer is never left
+// unpriced because a later step failed.
+func (s Service) CreateSupplierOfferWithDetailsForSubject(ctx context.Context, subject, supplierID string, draft OfferDraft) (SupplierOffer, error) {
+	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
+		return SupplierOffer{}, err
+	}
+	product, err := s.repo.GetSupplierProductByID(ctx, draft.SupplierProductID)
+	if err != nil {
+		return SupplierOffer{}, err
+	}
+	if product.SupplierID != supplierID {
+		return SupplierOffer{}, ErrNotFound
+	}
+	market, err := s.repo.GetSupplierMarketByID(ctx, draft.SupplierMarketID)
+	if err != nil {
+		return SupplierOffer{}, err
+	}
+	if market.SupplierID != supplierID || market.MarketCode != draft.MarketCode {
+		return SupplierOffer{}, ErrMarketMismatch
+	}
+	return s.repo.CreateSupplierOfferAtomically(ctx, supplierID, draft)
 }
 
 func (s Service) CreateSellerListingForSubject(ctx context.Context, subject, storeID, productID string, supplierOfferID *string, marketCode, status string) (SellerListing, error) {
