@@ -110,5 +110,14 @@ git diff --exit-code -- docs/api
 ```
 
 Core has no frontend workspace; the web applications live in the actor
-repositories. Kafka is intentionally not part of the runtime.
+repositories.
+
+## Messaging
+
+Synchronous inter-service capability calls use versioned HTTP/JSON. RabbitMQ is
+Matjero's asynchronous messaging backbone for commands, jobs, domain events, and
+fan-out, with the PostgreSQL transactional outbox making publication reliable and
+consumers designed for at-least-once delivery. Kafka is not part of the active
+architecture or roadmap. See
+[ADR-018](docs/plans/adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md).
 

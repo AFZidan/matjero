@@ -16,7 +16,7 @@ This plan translates `docs/plans/master-plan.md` into the concrete Phase 0 archi
 
 ## Grilling Outcome
 
-Phase 0 has no unresolved architecture blocker. The foundation will be a monorepo with independently buildable applications, a shared Commerce Core, infrastructure seams for PostgreSQL, Redis, RabbitMQ, ZITADEL, and OpenTelemetry, and no Kafka runtime dependency.
+Phase 0 has no unresolved architecture blocker. The foundation will be a monorepo with independently buildable applications, a shared Commerce Core, infrastructure seams for PostgreSQL, Redis, RabbitMQ, ZITADEL, and OpenTelemetry. RabbitMQ is the asynchronous messaging backbone per [ADR-018](adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md); no additional messaging broker is planned.
 
 Required now:
 
@@ -31,7 +31,7 @@ Required now:
 
 Prepared now, implemented later:
 
-- Kafka-compatible event contracts.
+- Transport-stable, versioned message contracts.
 - Double-entry ledger invariant.
 - Storefront tenant resolution contract.
 - Theme safety model.
@@ -40,7 +40,6 @@ Prepared now, implemented later:
 
 Postponed intentionally:
 
-- Kafka deployment.
 - Kubernetes, service mesh, sharding, distributed SQL, CQRS, and event sourcing.
 - Commerce features such as products, orders, checkout, payments, shipping, settlements, and integrations.
 
@@ -83,7 +82,6 @@ flowchart TB
     Redis[(Redis)]
     Rabbit[(RabbitMQ)]
     Outbox[(Transactional Outbox)]
-    Kafka[(Future Kafka)]
     Zitadel[ZITADEL]
     ObjectStorage[(Object Storage)]
     CDN[CDN]
@@ -108,7 +106,6 @@ flowchart TB
     Core --> Redis
     Core --> Outbox
     Outbox --> Rabbit
-    Outbox -. future .-> Kafka
 
     SupplierIntegrations --> Rabbit
     SellerIntegrations --> Rabbit
@@ -275,8 +272,9 @@ sequenceDiagram
 
 - PostgreSQL is the transactional source of truth.
 - Redis is never authoritative for orders, inventory, payments, balances, or settlements.
-- RabbitMQ handles commands, jobs, retries, and work queues.
-- Kafka is a future domain-event backbone and is introduced only when replay, fan-out, analytics, or ecosystem requirements justify it.
+- RabbitMQ is the sole asynchronous messaging backbone: asynchronous commands, jobs, retries, work queues, domain and integration events, and fan-out ([ADR-018](adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md)).
+- Synchronous inter-service capability calls use HTTP/JSON, never RabbitMQ RPC.
+- Message contracts are transport-stable and versioned, independent of broker implementation details.
 - Important state changes and outgoing events are persisted transactionally.
 - Important event consumers support idempotent processing by event identity.
 - Inventory reservation is strongly consistent.

@@ -50,7 +50,9 @@ Deliver the first production-ready native Matjero storefront experience and a re
 - Full validation suite per unit + final phase completion
 
 ### Out of Scope (Phase 5+)
-Cart, Checkout, Orders, Inventory Reservation, Shipping, Payments, Refunds, Ledger, Settlements, External Integrations, Marketplace, Reputation, Intelligence, Protected Access, Third-party Theme Marketplace, Theme Developer Ecosystem, Arbitrary Seller JavaScript/Code, Kafka, Dedicated Search Engine, Owned Warehouse, Cross-border Commerce, OpenAPI Breaking-Change Detection (stays deferred).
+Cart, Checkout, Orders, Inventory Reservation, Shipping, Payments, Refunds, Ledger, Settlements, External Integrations, Marketplace, Reputation, Intelligence, Protected Access, Third-party Theme Marketplace, Theme Developer Ecosystem, Arbitrary Seller JavaScript/Code, Dedicated Search Engine, Owned Warehouse, Cross-border Commerce, OpenAPI Breaking-Change Detection (stays deferred).
+
+Kafka and any additional messaging broker are not deferred to Phase 5+; they are not part of the roadmap at all. RabbitMQ is the asynchronous messaging backbone per [ADR-018](../plans/adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md).
 
 ## 3. Dependencies
 
@@ -442,7 +444,9 @@ Entities:
 
 ### 4.40 Out of Scope
 
-Do NOT implement: Cart, Checkout, Inventory reservation during checkout, Orders, Shipping, Payments, Refunds, Ledger, Settlements, External supplier integrations, External seller integrations, Unified marketplace, Reputation scoring, Product Intelligence, Protected Product Access, Third-party Theme Marketplace, Theme developer ecosystem, Arbitrary custom theme code, Kafka deployment, Dedicated search engine, Owned warehouse, Cross-border commerce.
+Do NOT implement: Cart, Checkout, Inventory reservation during checkout, Orders, Shipping, Payments, Refunds, Ledger, Settlements, External supplier integrations, External seller integrations, Unified marketplace, Reputation scoring, Product Intelligence, Protected Product Access, Third-party Theme Marketplace, Theme developer ecosystem, Arbitrary custom theme code, Dedicated search engine, Owned warehouse, Cross-border commerce.
+
+Kafka is not deferred work: it is not part of the roadmap ([ADR-018](../plans/adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md)). P4.4 also introduces no RabbitMQ cache-invalidation or event infrastructure; storefront cache invalidation stays revision-based.
 
 ### 4.41 Full Validation
 

@@ -1,5 +1,15 @@
 # Phase 0 Implementation Report
 
+> **Superseded architecture note.** Kafka was retained as a future possibility at
+> the time this report was written, which is why the architecture summary below
+> records "RabbitMQ as MVP queue/command transport" and documented Kafka
+> compatibility.
+> [ADR-018](../plans/adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md)
+> later retired that plan: RabbitMQ is the sole asynchronous messaging backbone,
+> not an MVP-only transport, and Kafka is not on the roadmap. Every reference
+> below that treats Kafka as deferred work is historical and no longer describes
+> the roadmap. The delivered implementation facts below are unchanged.
+
 ## Summary
 
 Phase 0 established the engineering and architecture foundation for the distributed commerce platform. The repository now contains architecture documentation, ADRs, backend foundations, frontend foundations, local development infrastructure, CI, migrations, and verification commands.

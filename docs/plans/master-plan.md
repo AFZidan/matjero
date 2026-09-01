@@ -193,31 +193,20 @@ Target architecture:
 PostgreSQL
 Redis
 RabbitMQ
-Kafka
-ZITADEL
-Object Storage
-CDN
-```
-
-However:
-
-## MVP Operational Stack
-
-The initial production deployment should prioritize:
-
-```text
-PostgreSQL
-Redis
-RabbitMQ
 Transactional Outbox
 ZITADEL
 Object Storage
 CDN
 ```
 
-Kafka should not be an operational dependency for the earliest MVP unless actual requirements justify it.
+The initial production deployment runs this same stack: there is no separate
+"later" broker to grow into. RabbitMQ is the single asynchronous messaging
+backbone, not a temporary MVP transport, and no additional messaging broker is
+planned. See
+[ADR-018](adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md).
 
-The system must still define event contracts in a Kafka-compatible manner from the beginning.
+Event and message contracts must be transport-stable and versioned from the
+beginning, independent of broker implementation details.
 
 ---
 
@@ -282,9 +271,13 @@ Loss of Redis must not corrupt transactional business state.
 
 # 8. RabbitMQ
 
-RabbitMQ is primarily for asynchronous commands and work queues.
+RabbitMQ is the single asynchronous messaging backbone. It carries asynchronous
+commands, work queues, background jobs, domain events, integration events,
+fan-out, notifications, webhook processing, search indexing, and long-running
+workflows. See
+[ADR-018](adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md).
 
-Examples:
+Command and job examples:
 
 ```text
 integration.product.pull
@@ -308,32 +301,7 @@ webhook.process
 reconciliation.run
 ```
 
-RabbitMQ responsibilities include:
-
-* Async jobs
-* Commands
-* Retries
-* Work distribution
-* Rate-controlled processing
-* Provider-specific workers
-
-Must support:
-
-* Retry policy
-* Dead-letter queues
-* Poison-message handling
-* Retry count
-* Correlation IDs
-* Idempotent consumers
-* Observability
-
----
-
-# 9. Kafka
-
-Kafka represents the long-term domain-event backbone.
-
-Examples:
+Domain and integration event examples:
 
 ```text
 ProductCreated
@@ -350,18 +318,55 @@ RefundCompleted
 SettlementCompleted
 ```
 
-Kafka should be introduced when requirements justify:
+These event names are illustrative. No event exists until the phase that owns it
+implements it.
 
-* Many independent consumers.
-* Event replay.
-* High-volume event fan-out.
-* Search indexing.
-* Analytics pipelines.
-* Data warehouse feeds.
-* Large integration ecosystems.
-* Derived read models.
+RabbitMQ responsibilities include:
 
-Do not introduce Kafka merely because the future architecture includes it.
+* Async jobs
+* Commands
+* Domain and integration events
+* Retries
+* Work distribution
+* Rate-controlled processing
+* Provider-specific workers
+
+Must support:
+
+* Retry policy
+* Dead-letter queues
+* Poison-message handling
+* Retry count
+* Correlation IDs
+* Idempotent consumers
+* Observability
+
+Delivery is designed as at-least-once. Consumers with side effects must be
+idempotent; exactly-once delivery must not be assumed.
+
+---
+
+# 9. Fan-Out
+
+Several consumers needing the same event is not a reason to introduce a second
+broker. A RabbitMQ exchange with independently bound queues gives each consumer
+its own backlog, failure isolation, retry policy, and dead-letter path.
+
+```text
+                  domain event
+                       │
+                       ▼
+                    Exchange
+                       │
+        ┌──────────────┼──────────────┐
+        ▼              ▼              ▼
+    search queue   notification   integration
+                      queue          queue
+```
+
+RabbitMQ is not the mechanism for synchronous request/response business
+capabilities. Those use HTTP/JSON. RabbitMQ RPC is not a platform default, and
+RabbitMQ must never carry database access instructions.
 
 ---
 
@@ -1156,7 +1161,7 @@ Independent integration deployment model
 
 Storefront tenant resolution
 
-Kafka introduction strategy
+Asynchronous messaging backbone
 ```
 
 These must be settled before downstream implementations depend on them.
@@ -1859,7 +1864,9 @@ for causal ordering.
 
 Do not rely purely on timestamps.
 
-Future Kafka partitioning should usually use:
+Ordering is a business requirement, not a transport configuration. Where a
+workflow requires it, messages affecting the same aggregate may need ordered
+processing, typically identified by:
 
 ```text
 Order events     → order_id
@@ -1867,7 +1874,9 @@ Inventory events → inventory_id / SKU pool
 Seller events    → seller_id
 ```
 
-depending on event semantics.
+depending on event semantics. State such a requirement as an ordering constraint
+on the owning workflow and satisfy it with aggregate identity plus aggregate
+version. Do not express it as a broker partition key.
 
 ---
 
@@ -3044,15 +3053,8 @@ Do not lose asynchronous work.
 
 Transactional operations requiring later jobs should use persisted outbox/job records where appropriate.
 
----
-
-## Kafka unavailable
-
-If Kafka is introduced later:
-
-Core transactions continue using PostgreSQL.
-
-Events remain recoverable through Outbox.
+Core transactions continue using PostgreSQL, and outgoing events remain
+recoverable through the Outbox once the broker returns.
 
 ---
 
@@ -3118,8 +3120,6 @@ RabbitMQ
 ZITADEL boundaries
 External integration adapters
 ```
-
-Kafka integration tests begin when Kafka is introduced.
 
 ---
 
@@ -3278,7 +3278,7 @@ ADR-010-storefront-tenant-resolution.md
 
 ADR-011-theme-security.md
 
-ADR-012-kafka-introduction.md
+ADR-018-rabbitmq-asynchronous-messaging-backbone.md
 ```
 
 ---
@@ -3356,7 +3356,6 @@ Simple marketplace discovery
 Do not block MVP on:
 
 ```text
-Kafka production deployment
 Large-scale consumer marketplace
 AI product recommendations
 ML ranking
@@ -3403,8 +3402,6 @@ Advanced Analytics
 
 Search Infrastructure
 
-Kafka Event Backbone
-
 Large-Scale Optimization
 ```
 
@@ -3430,12 +3427,11 @@ Large-Scale Optimization
           PostgreSQL      Redis      Transactional
                                      Outbox
                                           │
-                                ┌─────────┴─────────┐
-                                │                   │
-                            RabbitMQ              Kafka
-                             MVP Core         Scale / Events
-                                │
-                ┌───────────────┴──────────────────┐
+                                          ▼
+                                      RabbitMQ
+                                Asynchronous Backbone
+                                          │
+                ┌─────────────────────────┴────────┐
                 │                                  │
         Supplier Integrations              Seller Integrations
                 │                                  │
@@ -3568,7 +3564,7 @@ Themes are versioned and controlled; arbitrary seller JavaScript is not allowed 
 
 ## Rule 22
 
-Kafka is introduced when event scale and replay requirements justify it.
+RabbitMQ is the sole asynchronous messaging backbone; synchronous inter-service capability calls use HTTP/JSON.
 
 ## Rule 23
 
