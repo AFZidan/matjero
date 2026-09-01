@@ -1,5 +1,15 @@
 # Multi-Repository Folder Split — Implementation Report
 
+> **Superseded architecture notice.** This report accurately records what was
+> built at the time: actor repositories extracted into siblings that still
+> compiled against Core's Go packages. That compile-time coupling model is
+> superseded by
+> [ADR-017](../plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md)
+> and no longer describes the target architecture. The report has intentionally
+> not been rewritten. See
+> [repository-independence-report.md](repository-independence-report.md) for the
+> current model.
+
 ## 1. Summary
 
 The monorepo was split into six sibling folders, each ready to become an
