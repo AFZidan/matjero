@@ -516,15 +516,20 @@ Phase 4 is complete only when all completion criteria are met.
 ### P4.3 — Public Catalog
 - **Goal**: Store-scoped public catalog read model.
 - **Dependencies**: P4.2.
-- **Branch**: `feature/p4-public-catalog`
-- **Backend Work**:
-  - `internal/storefront` read repository (`catalog.go`): store-scoped joined queries (bootstrap, category list/tree, category page, product listing with filters, product detail, search) — modeled on `ListSupplierCatalog` JOIN LATERAL pattern.
-  - Public DTOs: customer-facing fields only (no supplier IDs/contact/cost, no wholesale price, no platform fees, no internal fulfillment metadata).
-  - storefront-api routes (public, RequireAuth false, tenant from validated host): bootstrap/store, categories, category by slug, products, product by slug, search.
+- **Branch**: `feature/p4-public-catalog` (in both `matjeroapps/core` and `matjeroapps/seller`).
+- **Ownership after the multi-repository split**: Core owns the read model; Seller owns HTTP routing and the Storefront OpenAPI document.
+- **Backend Work (Core — `github.com/matjeroapps/core`)**:
+  - `pkg/storefront/catalog.go`: public DTOs, `CatalogScope` (constructible only from a host-resolved `ResolvedStore`), validated locale, bounded `Page`, domain-neutral `ProductQuery` (keyword/category/price/availability/sort), sentinel errors `ErrCatalogNotFound` / `ErrInvalidQuery`.
+  - `pkg/storefront/catalog_repository.go`: `CatalogRepository` store-scoped joined queries (bootstrap, category tree, category by slug, product listing with filters, product detail, search) — modeled on the `ListSupplierCatalog` JOIN LATERAL pattern; one shared `eligibleListings` CTE defines public eligibility for every read.
+  - Public DTOs are purpose-built customer-facing projections (no supplier IDs/contact/cost, no wholesale price, no platform fees, no internal fulfillment metadata, no inventory quantities). Public price is always the current Seller Listing price. Availability is derived read-only from SKU + active market fulfillment locations + inventory snapshots, with no reservation or inventory writes.
+  - Bootstrap exposes published theme configuration only; draft configuration stays behind the P4.2 signed preview token.
+- **Backend Work (Seller — `github.com/matjeroapps/seller`)**:
+  - `apps/storefront-api` public routes (anonymous, tenant from validated host via the Core store resolver): bootstrap/store, categories, category by slug, products, product by slug, search.
+  - Request validation and mapping from Core read DTOs to stable public API response contracts.
 - **Frontend Work**: None.
 - **Database Changes**: None.
-- **API/OpenAPI Changes**: Storefront API public endpoints (Storefront, Catalog, Products, Categories, Search tags); regenerate `docs/api/storefront/openapi.json`.
-- **Tests**: Repository integration (testdb), API tests, sensitive-field leakage tests, price-source tests.
+- **API/OpenAPI Changes**: Storefront API public endpoints (Storefront, Catalog, Products, Categories, Search tags); regenerate `docs/api/storefront/openapi.json` in the Seller repository.
+- **Tests**: Core repository integration (testdb): two-store isolation both directions, cross-store category/product slugs, market isolation, ar/en projections, non-public record exclusion, price source, filters/sort/pagination, search scoping, sensitive-field serialization leakage, read-only state assertions. Seller: API tests, host-resolution tests, contract leakage tests.
 - **Acceptance Criteria**: All catalog tests pass; no supplier-privacy leakage; seller listing price only.
 
 ### P4.4 — Storefront Caching
