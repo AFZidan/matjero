@@ -169,6 +169,15 @@ imports neither Admin nor Supplier, and Supplier imports neither Admin nor
 Seller. The hub repositories declare no Go module and fabricate no Core
 dependency; they will depend on Core public packages when connector work begins.
 
+> **Superseded.** The compile-time dependency on Core described above was later
+> removed by the Repository Independence Rule in
+> [ADR-017](../plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md).
+> Actor repositories now reach Core through the internal HTTP API
+> (`apps/core-api`, `/internal/v1`) and import no Matjero Go module. Future hub
+> implementations must follow the same rule: runtime API/event contracts only,
+> never a Core source import. The rest of this report remains an accurate record
+> of the publication as it was performed.
+
 ## 10. Remote content scope
 
 | Repository | Verified contents |

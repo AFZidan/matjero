@@ -1,5 +1,26 @@
 # Phase 4 — Native Storefront + Theme Engine
 
+> **Architecture note (current).** Units P4.4 (Storefront Caching) and P4.5
+> (Storefront Rendering) and every later unit must assume the runtime boundary
+> introduced by
+> [ADR-017](../plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md):
+>
+> ```
+> storefront-api ──HTTP──► core-api ──► CatalogRepository ──► PostgreSQL
+> ```
+>
+> not
+>
+> ```
+> storefront-api ──Go import──► github.com/matjeroapps/core/pkg/storefront
+> ```
+>
+> The P4.3 business implementation (eligible listings, price-source rules, tenant
+> and market isolation, availability, privacy rules, search, filters, pagination)
+> stays in Core and is reached through `/internal/v1/storefront/*`. Seller owns a
+> local Core client and its own public DTOs. Completed P4.3 outcomes are
+> unchanged; only the transport between the two services changed.
+
 ## 1. Objective
 
 Deliver the first production-ready native Matjero storefront experience and a reusable, safe, versioned theme engine that supports multiple seller stores, custom store domains/subdomains, Arabic/English, RTL/LTR, SEO, caching, and future marketplace/search expansion.
