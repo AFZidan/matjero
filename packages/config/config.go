@@ -35,6 +35,14 @@ type Config struct {
 	// store-scoped theme draft preview tokens. It must be configuration-driven
 	// and is never hardcoded in application code.
 	ThemePreviewSecret string
+
+	// Internal service credentials for the Core internal API (ADR-017). Each
+	// actor service presents its own bearer token; a caller with no configured
+	// token cannot authenticate. These are secrets and must never be committed,
+	// logged, or embedded in an image layer.
+	InternalSellerToken   string
+	InternalAdminToken    string
+	InternalSupplierToken string
 }
 
 func Load(serviceName string) (Config, error) {
@@ -62,6 +70,10 @@ func Load(serviceName string) (Config, error) {
 		TrustedForwardedHost: boolEnv("TRUSTED_FORWARDED_HOST", false),
 		ReservedSubdomains:   stringSliceEnv("RESERVED_SUBDOMAINS", []string{"www", "api", "admin", "app", "cdn", "mail", "seller", "supplier", "static", "assets"}),
 		ThemePreviewSecret:   stringEnv("THEME_PREVIEW_SECRET", ""),
+
+		InternalSellerToken:   stringEnv("CORE_INTERNAL_SELLER_TOKEN", ""),
+		InternalAdminToken:    stringEnv("CORE_INTERNAL_ADMIN_TOKEN", ""),
+		InternalSupplierToken: stringEnv("CORE_INTERNAL_SUPPLIER_TOKEN", ""),
 	}, nil
 }
 

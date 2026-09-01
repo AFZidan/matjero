@@ -1,0 +1,230 @@
+package coreapi
+
+import (
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/matjeroapps/core/internal/serviceauth"
+	"github.com/matjeroapps/core/packages/httpx"
+	"github.com/matjeroapps/core/packages/i18n"
+	"github.com/matjeroapps/core/pkg/storefront"
+)
+
+// Storefront handlers expose the P4.3 public catalog read model over the
+// internal API. The business implementation stays here in Core: eligibility,
+// price-source rules, tenant isolation, market isolation, availability, privacy
+// rules, search, filters and pagination are never reimplemented by an actor.
+
+// scopeFor resolves the tenant from the trusted storefront host forwarded by the
+// actor and binds it to the negotiated locale.
+//
+// The request Host and any X-Forwarded-Host are ignored entirely. Tenant
+// authority comes only from X-Matjero-Storefront-Host, which the actor computes
+// using its own trusted-proxy policy after stripping any client-supplied copy.
+// Core never accepts a client-selectable store or seller identifier as tenant
+// authority.
+func (s *server) scopeFor(w http.ResponseWriter, r *http.Request) (storefront.CatalogScope, bool) {
+	host := serviceauth.StorefrontHostFrom(r)
+	if host == "" {
+		writeError(w, CodeStorefrontUnavailable)
+		return storefront.CatalogScope{}, false
+	}
+
+	resolved, err := s.deps.Stores.Resolve(r.Context(), host)
+	if err != nil {
+		writeDomainError(w, err)
+		return storefront.CatalogScope{}, false
+	}
+
+	scope, err := storefront.NewCatalogScope(resolved, i18n.FromContext(r.Context()))
+	if err != nil {
+		writeDomainError(w, err)
+		return storefront.CatalogScope{}, false
+	}
+	return scope, true
+}
+
+func (s *server) handleStorefrontStore(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	bootstrap, err := s.deps.Catalog.Bootstrap(r.Context(), scope)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, storefrontStoreResponse{Store: bootstrap})
+}
+
+func (s *server) handleStorefrontCategories(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	items, err := s.deps.Catalog.Categories(r.Context(), scope)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, CollectionResponse[storefront.CategoryNode]{Items: items})
+}
+
+func (s *server) handleStorefrontCategory(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	category, err := s.deps.Catalog.CategoryBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, storefrontCategoryResponse{Category: category})
+}
+
+func (s *server) handleStorefrontProducts(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	query, err := parseProductQuery(r)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	page, err := s.deps.Catalog.Products(r.Context(), scope, query)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, newStorefrontProductPage(page))
+}
+
+func (s *server) handleStorefrontProduct(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	product, err := s.deps.Catalog.ProductBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, storefrontProductResponse{Product: product})
+}
+
+func (s *server) handleStorefrontSearch(w http.ResponseWriter, r *http.Request) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	query, err := parseProductQuery(r)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	page, err := s.deps.Catalog.Search(r.Context(), scope, query.Keyword, query)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, newStorefrontProductPage(page))
+}
+
+// --- Storefront response contracts ---
+//
+// These mirror the shapes the seller storefront API already publishes so the
+// actor's public contract is unchanged by the transport migration.
+
+type storefrontStoreResponse struct {
+	Store storefront.StoreBootstrap `json:"store"`
+}
+
+type storefrontCategoryResponse struct {
+	Category storefront.CategoryNode `json:"category"`
+}
+
+type storefrontProductResponse struct {
+	Product storefront.ProductDetail `json:"product"`
+}
+
+type storefrontPagination struct {
+	Total  int64 `json:"total"`
+	Limit  int   `json:"limit"`
+	Offset int   `json:"offset"`
+}
+
+type storefrontProductPageResponse struct {
+	Items      []storefront.ProductListItem `json:"items"`
+	Pagination storefrontPagination         `json:"pagination"`
+}
+
+func newStorefrontProductPage(page storefront.ProductPage) storefrontProductPageResponse {
+	items := page.Items
+	if items == nil {
+		items = []storefront.ProductListItem{}
+	}
+	return storefrontProductPageResponse{
+		Items: items,
+		Pagination: storefrontPagination{
+			Total:  page.Total,
+			Limit:  page.Limit,
+			Offset: page.Offset,
+		},
+	}
+}
+
+// parseProductQuery validates public browse parameters before they reach the
+// read model. Malformed values are rejected rather than silently defaulted, so a
+// customer never receives a page they did not ask for. Bounds, sort names and
+// availability values are enforced by the read model itself.
+func parseProductQuery(r *http.Request) (storefront.ProductQuery, error) {
+	params := r.URL.Query()
+	query := storefront.ProductQuery{
+		CategorySlug: strings.TrimSpace(params.Get("category")),
+		Keyword:      strings.TrimSpace(params.Get("q")),
+		Availability: strings.TrimSpace(params.Get("availability")),
+		Sort:         strings.TrimSpace(params.Get("sort")),
+	}
+
+	limit, err := intParam(params.Get("limit"), "limit")
+	if err != nil {
+		return storefront.ProductQuery{}, err
+	}
+	offset, err := intParam(params.Get("offset"), "offset")
+	if err != nil {
+		return storefront.ProductQuery{}, err
+	}
+	if limit != nil {
+		query.Page.Limit = int(*limit)
+	}
+	if offset != nil {
+		query.Page.Offset = int(*offset)
+	}
+
+	if query.MinPriceMinor, err = intParam(params.Get("min_price"), "min_price"); err != nil {
+		return storefront.ProductQuery{}, err
+	}
+	if query.MaxPriceMinor, err = intParam(params.Get("max_price"), "max_price"); err != nil {
+		return storefront.ProductQuery{}, err
+	}
+
+	return query, nil
+}
+
+func intParam(raw, name string) (*int64, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s must be an integer", storefront.ErrInvalidQuery, name)
+	}
+	return &value, nil
+}

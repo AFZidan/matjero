@@ -232,6 +232,13 @@ redesign.
 No API-to-API HTTP coupling was introduced to solve the split. Every
 cross-repository dependency is a compile-time Go module dependency on Core.
 
+> **Superseded.** The compile-time model described above was later replaced by
+> the Repository Independence Rule in
+> [ADR-017](../plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md).
+> Actor repositories no longer import Core Go packages; they call the Core
+> internal HTTP API (`apps/core-api`, `/internal/v1`). The rest of this report
+> remains an accurate record of the folder split as it was performed.
+
 ## 8. OpenAPI drift proof
 
 Each sibling's spec generator was run and its output compared against the
