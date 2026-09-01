@@ -43,6 +43,16 @@ type ResponseSpec struct {
 	Status      int
 	Description string
 	Body        any
+	// Headers documents response headers that carry part of the contract, such
+	// as a cache-generation label a client is expected to act on.
+	Headers []HeaderSpec
+}
+
+// HeaderSpec describes one documented response header.
+type HeaderSpec struct {
+	Name        string
+	Description string
+	Schema      any
 }
 
 type DocumentSpec struct {
@@ -167,6 +177,21 @@ func operationFor(route RouteSpec, authenticated bool) (*openapi3.Operation, err
 				return nil, err
 			}
 			resp.Content = openapi3.NewContentWithJSONSchemaRef(schemaRef)
+		}
+		for _, header := range response.Headers {
+			schemaRef, err := schemaRefFor(header.Schema)
+			if err != nil {
+				return nil, err
+			}
+			if resp.Headers == nil {
+				resp.Headers = openapi3.Headers{}
+			}
+			resp.Headers[header.Name] = &openapi3.HeaderRef{Value: &openapi3.Header{
+				Parameter: openapi3.Parameter{
+					Description: header.Description,
+					Schema:      schemaRef,
+				},
+			}}
 		}
 		op.AddResponse(response.Status, resp)
 	}

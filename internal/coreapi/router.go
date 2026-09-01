@@ -42,6 +42,17 @@ type StoreLocator interface {
 	Resolve(ctx context.Context, domain string) (storefront.ResolvedStore, error)
 }
 
+// RevisionReader reports the authoritative public cache generation of a store.
+// storefront.RevisionReader satisfies it.
+//
+// It is read on every public storefront route, so a downstream cache can neither
+// serve a payload from an abandoned generation nor keep serving a store that
+// stopped resolving publicly.
+type RevisionReader interface {
+	Revision(ctx context.Context, host string) (int64, error)
+	RevisionFor(ctx context.Context, scope storefront.CatalogScope) (int64, error)
+}
+
 // MarketService lists and resolves markets. markets.Service satisfies it.
 type MarketService interface {
 	List(ctx context.Context, locale i18n.Locale) ([]markets.Market, error)
@@ -51,12 +62,13 @@ type MarketService interface {
 // Dependencies wires the internal API. Every field is a Core-owned capability;
 // no actor ever constructs these directly.
 type Dependencies struct {
-	Commerce commerce.Service
-	Repo     commerce.Repository
-	Markets  MarketService
-	Catalog  CatalogReader
-	Stores   StoreLocator
-	Themes   themes.Service
+	Commerce  commerce.Service
+	Repo      commerce.Repository
+	Markets   MarketService
+	Catalog   CatalogReader
+	Stores    StoreLocator
+	Revisions RevisionReader
+	Themes    themes.Service
 }
 
 // NewRouter registers the internal API under /internal/v1.
@@ -81,6 +93,7 @@ func NewRouter(deps Dependencies) chi.Router {
 		// serves customer storefront traffic.
 		r.Group(func(r chi.Router) {
 			r.Use(requireCallers(serviceauth.CallerSeller))
+			r.Get("/storefront/revision", server.handleStorefrontRevision)
 			r.Get("/storefront/store", server.handleStorefrontStore)
 			r.Get("/storefront/categories", server.handleStorefrontCategories)
 			r.Get("/storefront/categories/{slug}", server.handleStorefrontCategory)

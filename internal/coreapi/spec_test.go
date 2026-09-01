@@ -128,3 +128,39 @@ func TestEveryRouteDeclaresUnauthorized(t *testing.T) {
 		}
 	}
 }
+
+// A caching consumer keys its cache by the generation returned with each payload,
+// so every public storefront read must declare the header that carries it. A read
+// added without it would be silently uncacheable.
+func TestStorefrontReadsDeclareRevisionHeader(t *testing.T) {
+	want := map[string]bool{
+		"/internal/v1/storefront/store":             false,
+		"/internal/v1/storefront/categories":        false,
+		"/internal/v1/storefront/categories/{slug}": false,
+		"/internal/v1/storefront/products":          false,
+		"/internal/v1/storefront/products/{slug}":   false,
+		"/internal/v1/storefront/search":            false,
+	}
+
+	for _, route := range internalRoutes() {
+		if _, tracked := want[route.Path]; !tracked {
+			continue
+		}
+		for _, response := range route.Responses {
+			if response.Status != http.StatusOK {
+				continue
+			}
+			for _, header := range response.Headers {
+				if header.Name == HeaderStorefrontRevision {
+					want[route.Path] = true
+				}
+			}
+		}
+	}
+
+	for path, declared := range want {
+		if !declared {
+			t.Errorf("%s does not declare the %s response header", path, HeaderStorefrontRevision)
+		}
+	}
+}

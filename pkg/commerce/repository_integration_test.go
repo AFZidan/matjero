@@ -28,6 +28,7 @@ func TestRepositoryCommerceFoundations(t *testing.T) {
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000004_admin_supplier_seller_platforms.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000005_store_domain_lifecycle.up.sql"))
 	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000006_store_domain_integrity.up.sql"))
+	applySQLFile(t, db, filepath.Join("..", "..", "migrations", "000008_storefront_revisions.up.sql"))
 
 	repo := NewRepository(db.Pool)
 	service := NewService(repo)

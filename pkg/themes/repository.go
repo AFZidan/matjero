@@ -246,13 +246,18 @@ func (r Repository) CreateInstallation(ctx context.Context, storeID, themeID, th
 	}
 	var inst ThemeInstallation
 	id := uuid.NewString()
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO theme_installations (id, store_id, theme_id, theme_version_id, status)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING installed_at, created_at, updated_at
-	`, id, storeID, themeID, themeVersionID, status).Scan(&inst.InstalledAt, &inst.CreatedAt, &inst.UpdatedAt)
+	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO theme_installations (id, store_id, theme_id, theme_version_id, status)
+			VALUES ($1, $2, $3, $4, $5)
+			RETURNING installed_at, created_at, updated_at
+		`, id, storeID, themeID, themeVersionID, status).Scan(&inst.InstalledAt, &inst.CreatedAt, &inst.UpdatedAt); err != nil {
+			return translatePGError(err, "create installation")
+		}
+		return bumpStorefrontRevision(ctx, tx, revisionStoreItself, storeID)
+	})
 	if err != nil {
-		return ThemeInstallation{}, translatePGError(err, "create installation")
+		return ThemeInstallation{}, err
 	}
 	inst.ID, inst.StoreID, inst.ThemeID, inst.ThemeVersionID, inst.Status = id, storeID, themeID, themeVersionID, status
 	return inst, nil
@@ -274,18 +279,29 @@ func (r Repository) GetInstallationByStore(ctx context.Context, storeID string) 
 // DeactivateInstallations flips any active installation for a store to inactive.
 // The partial unique index guarantees at most one active installation remains.
 func (r Repository) DeactivateInstallations(ctx context.Context, storeID string) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE theme_installations SET status = 'inactive', updated_at = now()
-		WHERE store_id = $1 AND status = 'active'
-	`, storeID)
-	return translatePGError(err, "deactivate installations")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE theme_installations SET status = 'inactive', updated_at = now()
+			WHERE store_id = $1 AND status = 'active'
+		`, storeID); err != nil {
+			return translatePGError(err, "deactivate installations")
+		}
+		// Leaving a store with no active theme changes its bootstrap payload.
+		return bumpStorefrontRevision(ctx, tx, revisionStoreItself, storeID)
+	})
 }
 
 func (r Repository) UpdateInstallationVersion(ctx context.Context, installationID, themeVersionID string) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE theme_installations SET theme_version_id = $2, updated_at = now() WHERE id = $1
-	`, installationID, themeVersionID)
-	return translatePGError(err, "update installation version")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE theme_installations SET theme_version_id = $2, updated_at = now() WHERE id = $1
+		`, installationID, themeVersionID); err != nil {
+			return translatePGError(err, "update installation version")
+		}
+		// The bootstrap payload names the installed version, so an upgrade changes
+		// public output even when the configuration is untouched.
+		return bumpStorefrontRevision(ctx, tx, revisionStoreByInstallation, installationID)
+	})
 }
 
 // InstallAtomically binds a store to a theme version in a single transaction: it
@@ -345,7 +361,9 @@ func (r Repository) InstallAtomically(ctx context.Context, storeID, themeID, the
 		cfg.PublishedConfig = defaultConfig
 		cfg.DraftRevision = 0
 		cfg.PublishedRevision = 0
-		return nil
+		// Installing or switching a theme replaces the store's published
+		// presentation, which the bootstrap payload exposes.
+		return bumpStorefrontRevision(ctx, tx, revisionStoreItself, storeID)
 	})
 	if err != nil {
 		return ThemeInstallation{}, ThemeConfiguration{}, err
@@ -369,13 +387,18 @@ func (r Repository) CreateConfiguration(ctx context.Context, installationID stri
 	id := uuid.NewString()
 	draftBytes, _ := json.Marshal(draft)
 	publishedBytes, _ := json.Marshal(published)
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO theme_configurations (id, installation_id, draft_config, published_config)
-		VALUES ($1, $2, $3, $4)
-		RETURNING updated_at
-	`, id, installationID, draftBytes, publishedBytes).Scan(&c.UpdatedAt)
+	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO theme_configurations (id, installation_id, draft_config, published_config)
+			VALUES ($1, $2, $3, $4)
+			RETURNING updated_at
+		`, id, installationID, draftBytes, publishedBytes).Scan(&c.UpdatedAt); err != nil {
+			return translatePGError(err, "create configuration")
+		}
+		return bumpStorefrontRevision(ctx, tx, revisionStoreByInstallation, installationID)
+	})
 	if err != nil {
-		return ThemeConfiguration{}, translatePGError(err, "create configuration")
+		return ThemeConfiguration{}, err
 	}
 	c.ID = id
 	c.InstallationID = installationID
@@ -439,7 +462,7 @@ func (r Repository) PublishConfiguration(ctx context.Context, installationID str
 			return fmt.Errorf("%w: draft changed since it was validated", ErrConflict)
 		}
 		now := time.Now()
-		return tx.QueryRow(ctx, `
+		if err := tx.QueryRow(ctx, `
 			UPDATE theme_configurations
 			SET published_config = $2,
 				published_revision = published_revision + 1,
@@ -449,7 +472,12 @@ func (r Repository) PublishConfiguration(ctx context.Context, installationID str
 			RETURNING id, installation_id, draft_config, published_config, draft_revision, published_revision, updated_at, published_at
 		`, installationID, draftBytes, now).Scan(
 			&c.ID, &c.InstallationID, &draftBytes, &publishedBytes, &c.DraftRevision, &c.PublishedRevision, &c.UpdatedAt, &c.PublishedAt,
-		)
+		); err != nil {
+			return err
+		}
+		// Publishing is the moment theme configuration becomes public, so it is
+		// the only configuration write that advances the storefront generation.
+		return bumpStorefrontRevision(ctx, tx, revisionStoreByInstallation, installationID)
 	})
 	if err != nil {
 		return ThemeConfiguration{}, err

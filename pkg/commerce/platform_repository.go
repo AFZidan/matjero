@@ -505,22 +505,10 @@ func (r Repository) SetProductCategories(ctx context.Context, productID string, 
 	}
 
 	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM product_categories WHERE product_id = $1`, productID); err != nil {
-			return fmt.Errorf("clear product categories: %w", err)
+		if err := setProductCategoriesTx(ctx, tx, productID, categoryIDs); err != nil {
+			return err
 		}
-		for _, categoryID := range uniqueStrings(categoryIDs) {
-			if categoryID == "" {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `
-				INSERT INTO product_categories (product_id, category_id)
-				VALUES ($1, $2)
-				ON CONFLICT (product_id, category_id) DO NOTHING
-			`, productID, categoryID); err != nil {
-				return translatePGError(err, "set product categories")
-			}
-		}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByProduct, productID)
 	})
 }
 
@@ -624,7 +612,7 @@ func (r Repository) AdjustInventory(ctx context.Context, snapshotID string, quan
 			CausationID:         causationID,
 			CreatedAt:           movement.CreatedAt,
 		}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByInventorySnapshot, snapshotID)
 	})
 	return updated, movement, err
 }
@@ -815,7 +803,7 @@ func (r Repository) UpdateSellerProfile(ctx context.Context, sellerID, name, sta
 }
 
 func (r Repository) UpdateStoreStatus(ctx context.Context, storeID, status string) error {
-	return updateStatus(ctx, r.pool, "stores", storeID, status)
+	return r.updateStorefrontStatus(ctx, "stores", revisionStoreItself, storeID, status)
 }
 
 func (r Repository) UpdateStoreProfile(ctx context.Context, storeID, name, status string, settings map[string]any) error {
@@ -837,44 +825,56 @@ func (r Repository) UpdateStoreProfile(ctx context.Context, storeID, name, statu
 		`, storeID, settings); err != nil {
 			return err
 		}
-		return nil
+		// The store name and its public settings are both part of the storefront
+		// bootstrap payload.
+		return bumpStorefrontRevisions(ctx, tx, revisionStoreItself, storeID)
 	})
 }
 
 func (r Repository) UpdateProductStatus(ctx context.Context, productID, status string) error {
-	return updateStatus(ctx, r.pool, "products", productID, status)
+	return r.updateStorefrontStatus(ctx, "products", revisionStoresByProduct, productID, status)
 }
 
 func (r Repository) UpdateProduct(ctx context.Context, productID, slug, status string) error {
 	if productID == "" || slug == "" || status == "" {
 		return ErrInvalidInput
 	}
-	_, err := r.pool.Exec(ctx, `
-		UPDATE products
-		SET slug = $2, status = $3, updated_at = now()
-		WHERE id = $1
-	`, productID, slug, status)
-	return translatePGError(err, "update product")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE products
+			SET slug = $2, status = $3, updated_at = now()
+			WHERE id = $1
+		`, productID, slug, status); err != nil {
+			return translatePGError(err, "update product")
+		}
+		// The slug is the public product URL, so a rename changes every public
+		// path that resolves to it.
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByProduct, productID)
+	})
 }
 
 func (r Repository) UpdateCategoryStatus(ctx context.Context, categoryID, status string) error {
-	return updateStatus(ctx, r.pool, "categories", categoryID, status)
+	return r.updateStorefrontStatus(ctx, "categories", revisionStoresByCategorySubtree, categoryID, status)
 }
 
 func (r Repository) UpdateCategory(ctx context.Context, categoryID, slug, status string, parentCategoryID *string) error {
 	if categoryID == "" || slug == "" || status == "" {
 		return ErrInvalidInput
 	}
-	_, err := r.pool.Exec(ctx, `
-		UPDATE categories
-		SET slug = $2, parent_category_id = $3, status = $4, updated_at = now()
-		WHERE id = $1
-	`, categoryID, slug, parentCategoryID, status)
-	return translatePGError(err, "update category")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			UPDATE categories
+			SET slug = $2, parent_category_id = $3, status = $4, updated_at = now()
+			WHERE id = $1
+		`, categoryID, slug, parentCategoryID, status); err != nil {
+			return translatePGError(err, "update category")
+		}
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByCategorySubtree, categoryID)
+	})
 }
 
 func (r Repository) UpdateSupplierOfferStatus(ctx context.Context, offerID, status string) error {
-	return updateStatus(ctx, r.pool, "supplier_offers", offerID, status)
+	return r.updateStorefrontStatus(ctx, "supplier_offers", revisionStoresBySupplierOffer, offerID, status)
 }
 
 func (r Repository) UpdateSupplierMarketStatus(ctx context.Context, supplierMarketID, status string) error {
@@ -882,11 +882,11 @@ func (r Repository) UpdateSupplierMarketStatus(ctx context.Context, supplierMark
 }
 
 func (r Repository) UpdateSellerListingStatus(ctx context.Context, listingID, status string) error {
-	return updateStatus(ctx, r.pool, "seller_listings", listingID, status)
+	return r.updateStorefrontStatus(ctx, "seller_listings", revisionStoresByListing, listingID, status)
 }
 
 func (r Repository) UpdateFulfillmentLocationStatus(ctx context.Context, locationID, status string) error {
-	return updateStatus(ctx, r.pool, "fulfillment_locations", locationID, status)
+	return r.updateStorefrontStatus(ctx, "fulfillment_locations", revisionStoresByFulfillmentLocation, locationID, status)
 }
 
 func updateStatus(ctx context.Context, pool *pgxpool.Pool, table, id, status string) error {

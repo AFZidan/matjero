@@ -48,6 +48,8 @@ type integrationEnv struct {
 	sellerA  commerce.Seller
 	sellerB  commerce.Seller
 	supplier commerce.Supplier
+	listingA commerce.SellerListing
+	listingB commerce.SellerListing
 }
 
 func setupIntegration(t *testing.T) integrationEnv {
@@ -67,6 +69,7 @@ func setupIntegration(t *testing.T) integrationEnv {
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
 		"000007_theme_engine_schema",
+		"000008_storefront_revisions",
 	} {
 		applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", name+".up.sql"))
 	}
@@ -91,13 +94,15 @@ func setupIntegration(t *testing.T) integrationEnv {
 		t.Fatalf("seed built-in themes: %v", err)
 	}
 
+	resolver := storefront.NewStoreResolver(repo)
 	deps := Dependencies{
-		Commerce: service,
-		Repo:     repo,
-		Markets:  markets.NewService(markets.NewRepository(db.Pool)),
-		Catalog:  storefront.NewCatalogRepository(db.Pool),
-		Stores:   storefront.NewStoreResolver(repo),
-		Themes:   themeService,
+		Commerce:  service,
+		Repo:      repo,
+		Markets:   markets.NewService(markets.NewRepository(db.Pool)),
+		Catalog:   storefront.NewCatalogRepository(db.Pool),
+		Stores:    resolver,
+		Revisions: storefront.NewRevisionReader(resolver, repo),
+		Themes:    themeService,
 	}
 	env.handler = serviceauth.Middleware(testAuthConfig())(NewRouter(deps))
 
@@ -158,14 +163,14 @@ func (e *integrationEnv) seed(t *testing.T) {
 	e.assignCategory(t, lamp, lighting)
 	e.stock(t, lamp, location.ID, 5)
 	lampOffer := e.offer(t, supplier.ID, lamp, market.ID)
-	e.listing(t, storeA.ID, lamp, lampOffer, "active", integrationStoreAPrice)
+	e.listingA = e.listing(t, storeA.ID, lamp, lampOffer, "active", integrationStoreAPrice)
 
 	// Store B: out-of-stock kettle priced 199.
 	kettle := e.product(t, "store-b-kettle", "Kettle", "غلاية", "A fast kettle", "غلاية سريعة")
 	e.assignCategory(t, kettle, kitchen)
 	e.stock(t, kettle, location.ID, 0)
 	kettleOffer := e.offer(t, supplier.ID, kettle, market.ID)
-	e.listing(t, storeB.ID, kettle, kettleOffer, "active", integrationStoreBPrice)
+	e.listingB = e.listing(t, storeB.ID, kettle, kettleOffer, "active", integrationStoreBPrice)
 }
 
 func (e integrationEnv) category(t *testing.T, slug, nameEN, nameAR string) commerce.Category {
@@ -245,7 +250,7 @@ func (e integrationEnv) offer(t *testing.T, supplierID string, product commerce.
 	return offer
 }
 
-func (e integrationEnv) listing(t *testing.T, storeID string, product commerce.Product, offer commerce.SupplierOffer, status string, priceMinor int64) {
+func (e integrationEnv) listing(t *testing.T, storeID string, product commerce.Product, offer commerce.SupplierOffer, status string, priceMinor int64) commerce.SellerListing {
 	t.Helper()
 	offerID := offer.ID
 	listing, err := e.repo.CreateSellerListing(e.ctx, storeID, product.ID, &offerID, "EG", status)
@@ -259,6 +264,7 @@ func (e integrationEnv) listing(t *testing.T, storeID string, product commerce.P
 	if _, err := e.repo.SetSellerListingPrice(e.ctx, listing.ID, price); err != nil {
 		t.Fatalf("set listing price: %v", err)
 	}
+	return listing
 }
 
 func applyMigrationFile(t *testing.T, db *database.Pool, path string) {
@@ -646,17 +652,20 @@ func TestIntegrationThemePreviewFailsClosedWithoutSecret(t *testing.T) {
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
 		"000007_theme_engine_schema",
+		"000008_storefront_revisions",
 	} {
 		applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", name+".up.sql"))
 	}
 
 	repo := commerce.NewRepository(db.Pool)
+	resolver := storefront.NewStoreResolver(repo)
 	deps := Dependencies{
-		Commerce: commerce.NewService(repo),
-		Repo:     repo,
-		Markets:  markets.NewService(markets.NewRepository(db.Pool)),
-		Catalog:  storefront.NewCatalogRepository(db.Pool),
-		Stores:   storefront.NewStoreResolver(repo),
+		Commerce:  commerce.NewService(repo),
+		Repo:      repo,
+		Markets:   markets.NewService(markets.NewRepository(db.Pool)),
+		Catalog:   storefront.NewCatalogRepository(db.Pool),
+		Stores:    resolver,
+		Revisions: storefront.NewRevisionReader(resolver, repo),
 		// No PreviewSecret: the service must fail closed.
 		Themes: themes.NewService(themes.NewRepository(db.Pool), repo, themes.Options{}),
 	}

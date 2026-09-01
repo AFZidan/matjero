@@ -73,12 +73,14 @@ func run(ctx context.Context) error {
 	service.PlatformDomain = cfg.PlatformDomain
 	service.ReservedSubdomains = cfg.ReservedSubdomains
 
+	resolver := storefront.NewStoreResolver(repo)
 	deps := coreapi.Dependencies{
-		Commerce: service,
-		Repo:     repo,
-		Markets:  markets.NewService(markets.NewRepository(db.Pool)),
-		Catalog:  storefront.NewCatalogRepository(db.Pool),
-		Stores:   storefront.NewStoreResolver(repo),
+		Commerce:  service,
+		Repo:      repo,
+		Markets:   markets.NewService(markets.NewRepository(db.Pool)),
+		Catalog:   storefront.NewCatalogRepository(db.Pool),
+		Stores:    resolver,
+		Revisions: storefront.NewRevisionReader(resolver, repo),
 		Themes: themes.NewService(themes.NewRepository(db.Pool), repo, themes.Options{
 			PreviewSecret: []byte(cfg.ThemePreviewSecret),
 		}),

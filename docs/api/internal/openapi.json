@@ -10,7 +10,7 @@
     }
   },
   "info": {
-    "description": "Internal service-to-service API exposing Core-owned business capabilities.\n\nThis API is NOT public. It is intended for a private service network with TLS\noutside trusted local development. It is never exposed through the public\nstorefront domain and has no browser CORS.\n\nEvery request must present a per-caller service credential:\n\n  Authorization: Bearer \u003cservice-token\u003e\n  X-Matjero-Service: seller|admin|supplier\n\nThe token is bound to the caller named in X-Matjero-Service; a valid token\npresented under a different caller name is rejected.\n\nActor APIs forward a minimal verified actor context:\n\n  X-Matjero-Subject: \u003cauthenticated end-user subject\u003e\n  X-Matjero-Storefront-Host: \u003ctrusted normalized storefront host\u003e\n\nCore resolves business identity from the subject itself and never trusts a\ncaller-supplied seller, supplier or store identifier as an authorization\ndecision. Actors must strip any client-supplied copy of these headers before\nsetting trusted values.\n\nErrors use a closed vocabulary (not_found, invalid_argument, validation_error,\nunauthorized, forbidden, conflict, market_mismatch, insufficient_inventory,\nschema_mismatch, unsafe_content, preview_unavailable, storefront_unavailable,\nunavailable, internal_error). Error responses never carry SQL text, stack\ntraces, internal table names or secret values.",
+    "description": "Internal service-to-service API exposing Core-owned business capabilities.\n\nThis API is NOT public. It is intended for a private service network with TLS\noutside trusted local development. It is never exposed through the public\nstorefront domain and has no browser CORS.\n\nEvery request must present a per-caller service credential:\n\n  Authorization: Bearer \u003cservice-token\u003e\n  X-Matjero-Service: seller|admin|supplier\n\nThe token is bound to the caller named in X-Matjero-Service; a valid token\npresented under a different caller name is rejected.\n\nActor APIs forward a minimal verified actor context:\n\n  X-Matjero-Subject: \u003cauthenticated end-user subject\u003e\n  X-Matjero-Storefront-Host: \u003ctrusted normalized storefront host\u003e\n\nCore resolves business identity from the subject itself and never trusts a\ncaller-supplied seller, supplier or store identifier as an authorization\ndecision. Actors must strip any client-supplied copy of these headers before\nsetting trusted values.\n\nSuccessful public storefront reads carry the authoritative cache generation of\nthe resolved store:\n\n  X-Matjero-Storefront-Revision: \u003copaque generation\u003e\n\nThe generation is read before the payload, so it is a lower bound on the\npayload's freshness. A caching actor stores each response under the generation\nreturned with it, never under one it probed earlier, and treats the value as\nopaque.\n\nErrors use a closed vocabulary (not_found, invalid_argument, validation_error,\nunauthorized, forbidden, conflict, market_mismatch, insufficient_inventory,\nschema_mismatch, unsafe_content, preview_unavailable, storefront_unavailable,\nunavailable, internal_error). Error responses never carry SQL text, stack\ntraces, internal table names or secret values.",
     "title": "Matjero Core Internal API",
     "version": "1.0.0"
   },
@@ -5064,7 +5064,16 @@
                 }
               }
             },
-            "description": "Category collection"
+            "description": "Category collection",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -5260,7 +5269,16 @@
                 }
               }
             },
-            "description": "Category"
+            "description": "Category",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -5580,7 +5598,16 @@
                 }
               }
             },
-            "description": "Product page"
+            "description": "Product page",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -5864,7 +5891,16 @@
                 }
               }
             },
-            "description": "Product detail"
+            "description": "Product detail",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -5993,6 +6029,172 @@
           }
         ],
         "summary": "Get a public product",
+        "tags": [
+          "Storefront"
+        ]
+      }
+    },
+    "/internal/v1/storefront/revision": {
+      "get": {
+        "description": "Returns the authoritative, opaque cache generation of the store resolved from X-Matjero-Storefront-Host. It changes whenever anything the public storefront renders for that store changes, so a cache that includes it in its key is invalidated by moving to a new namespace instead of deleting entries. An unknown host, an inactive domain and an inactive store are indistinguishable and yield no revision, which stops a cache from serving a store that no longer resolves publicly. The number carries no business meaning.",
+        "operationId": "internalGetStorefrontRevision",
+        "parameters": [
+          {
+            "description": "Override locale resolution",
+            "in": "query",
+            "name": "locale",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "revision": {
+                      "format": "int64",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "revision"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Storefront cache generation"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not found"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "error": {
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Read the public cache generation for a trusted host",
         "tags": [
           "Storefront"
         ]
@@ -6192,7 +6394,16 @@
                 }
               }
             },
-            "description": "Product page"
+            "description": "Product page",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {
@@ -6443,7 +6654,16 @@
                 }
               }
             },
-            "description": "Storefront bootstrap"
+            "description": "Storefront bootstrap",
+            "headers": {
+              "X-Matjero-Storefront-Revision": {
+                "description": "Opaque public cache generation of the resolved store",
+                "schema": {
+                  "format": "int64",
+                  "type": "integer"
+                }
+              }
+            }
           },
           "401": {
             "content": {

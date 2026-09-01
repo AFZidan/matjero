@@ -60,6 +60,7 @@ func setupCatalogTest(t *testing.T) catalogEnv {
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
 		"000007_theme_engine_schema",
+		"000008_storefront_revisions",
 	} {
 		applySQLFileStorefront(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))
 	}
