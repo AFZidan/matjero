@@ -6,7 +6,7 @@ Accepted
 
 ## Decision
 
-PostgreSQL is the transactional source of truth for platform business state. Redis, RabbitMQ, Kafka, caches, search indexes, and external systems are derived or transport layers.
+PostgreSQL is the transactional source of truth for platform business state. Redis, RabbitMQ, caches, search indexes, and external systems are derived or transport layers.
 
 ## Consequences
 

@@ -1,5 +1,16 @@
 # Phase 0: Engineering and Architecture Foundation
 
+> **Superseded architecture note.** Kafka was retained here as a future
+> possibility at the time this specification was written, and P0.6 described
+> envelopes as "Kafka-compatible".
+> [ADR-018](../plans/adr/ADR-018-rabbitmq-asynchronous-messaging-backbone.md)
+> later retired that plan and standardized RabbitMQ as the sole asynchronous
+> messaging backbone. Every reference below that treats Kafka as deferred or
+> future work is historical and no longer describes the roadmap: Kafka is not
+> planned. The envelope conventions delivered by P0.6 are unchanged and are now
+> described as transport-stable versioned contracts. The Phase 0 implementation
+> facts below are preserved as delivered.
+
 ## Objective
 
 Establish the repository, architecture documentation, backend foundations, frontend foundations, local development infrastructure, CI, and verification strategy needed before commerce implementation begins.
