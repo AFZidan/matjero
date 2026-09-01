@@ -7,6 +7,12 @@ that an actor repository (admin, seller, supplier) currently has on
 `github.com/matjeroapps/core`. No architectural change was made before this
 inventory was complete.
 
+> **Status: fully resolved.** Every dependency listed below has been removed. The
+> inventory is retained as the historical record of the starting state and is
+> written in the present tense of that moment. See
+> [repository-independence-report.md](repository-independence-report.md) for the
+> completion evidence and the final independence matrix.
+
 ## Rule being implemented
 
 > No Matjero repository may import source code, Go packages, workspace modules,

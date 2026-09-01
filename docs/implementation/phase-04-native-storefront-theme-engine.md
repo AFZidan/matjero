@@ -20,6 +20,13 @@
 > stays in Core and is reached through `/internal/v1/storefront/*`. Seller owns a
 > local Core client and its own public DTOs. Completed P4.3 outcomes are
 > unchanged; only the transport between the two services changed.
+>
+> **This boundary is now live and verified.** The Repository Independence
+> Refactor is merged across all four repositories and its runtime smoke confirmed
+> the storefront path above end to end, including tenant isolation, supplier
+> price privacy, locale negotiation, and generic 503 behaviour when Core is
+> unavailable. P4.4 must be built against this boundary from the start. Evidence:
+> [repository-independence-report.md](repository-independence-report.md).
 
 ## 1. Objective
 

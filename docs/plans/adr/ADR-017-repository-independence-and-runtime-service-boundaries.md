@@ -184,3 +184,37 @@ reintroduce compile-time coupling.
 
 Each stage ends at a manual merge gate. No actor is migrated against Core code
 that exists only on an unmerged branch.
+
+## Implementation status
+
+Fully implemented and merged. All five migration stages completed, and the final
+cross-repository audit and runtime smoke passed.
+
+| Repository | Independence PR | Fix PR | `main` at completion |
+| --- | --- | --- | --- |
+| core | #13 | #14 | `1336f05751c2c47001d833ca201b748bfa37f793` |
+| seller | #2 | #3 | `6600052f8bcef034cdd39383a5d5b6e02f9d0cb3` |
+| admin | #1 | #2 | `c42c79bcf5698235784070ceb38e078caf38c982` |
+| supplier | #1 | #2 | `0d601c81b9ecd5b486f45a690f4e9a716efd12d5` |
+
+Every repository resolves exactly one Matjero Go module, its own. Core is the
+only repository with database access. Every repository builds, tests, generates
+its OpenAPI document, and containerises from a clean clone with no other Matjero
+repository present and no Go workspace.
+
+The audit surfaced two defect classes, each fixed in its own pull request rather
+than in the documentation pull request: an actor root router assembly panic that
+predated this refactor, and non-atomic Core supplier composite writes. Both are
+fixed, covered by tests, and re-verified at runtime against merged code.
+
+Full evidence, matrices, and known limitations are recorded in
+[docs/implementation/repository-independence-report.md](../../implementation/repository-independence-report.md).
+
+### Runtime transport rule
+
+Synchronous business capability calls use versioned HTTP/JSON against Core's
+`/internal/v1/*` surface. RabbitMQ is reserved for asynchronous work: background
+jobs, fire-and-forget commands, deferred processing, and domain-event delivery.
+The Core PostgreSQL database remains Core-owned, and RabbitMQ must never be used
+as a back door to arbitrary SQL against it. Messages carry domain intent, never
+database access.

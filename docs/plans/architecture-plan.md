@@ -2,6 +2,18 @@
 
 This plan translates `docs/plans/master-plan.md` into the concrete Phase 0 architecture. The Master Plan remains the roadmap and source of business scope.
 
+> **Superseded in part.** This plan describes a Phase 0 monorepo with a *shared*
+> Commerce Core consumed as Go packages by thin actor-facing APIs. That
+> consumption model is superseded by
+> [ADR-017](adr/ADR-017-repository-independence-and-runtime-service-boundaries.md).
+> Core is now a runtime business capability boundary reached over versioned
+> HTTP/JSON, and the actor repositories are independent Go modules that share no
+> compile-time code with Core. The domain decisions, infrastructure seams, and
+> phase sequencing in this plan remain in force. Wherever this plan says an actor
+> API "calls shared Commerce Core modules", read it as "calls Core's
+> `/internal/v1/*` HTTP surface". Completion evidence:
+> [repository-independence-report.md](../implementation/repository-independence-report.md).
+
 ## Grilling Outcome
 
 Phase 0 has no unresolved architecture blocker. The foundation will be a monorepo with independently buildable applications, a shared Commerce Core, infrastructure seams for PostgreSQL, Redis, RabbitMQ, ZITADEL, and OpenTelemetry, and no Kafka runtime dependency.

@@ -1,5 +1,14 @@
 # Multi-Repository Publication — Implementation Report
 
+> **Superseded architecture notice.** This report accurately records what was
+> built at the time: three actor modules wired to a published Core Go module.
+> That compile-time coupling model is superseded by
+> [ADR-017](../plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md);
+> no actor repository requires the Core Go module any longer. The report has
+> intentionally not been rewritten. See
+> [repository-independence-report.md](repository-independence-report.md) for the
+> current model.
+
 ## 1. Summary
 
 The six Matjero repositories are published, wired to a real remote Core

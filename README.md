@@ -1,9 +1,8 @@
 # Matjero Core
 
-Shared domain, infrastructure, and data foundation for the Matjero distributed
-commerce platform. This repository owns the business logic, the centralized
-database migrations, and the internal runtime API that actor repositories call
-over HTTP.
+Domain, infrastructure, and data foundation for the Matjero distributed commerce
+platform. This repository owns the business logic, the centralized database
+migrations, and the internal runtime API that actor repositories call over HTTP.
 
 ## Repository Independence Rule
 
@@ -18,11 +17,15 @@ API served by `apps/core-api` under `/internal/v1`. See
 [ADR-017](docs/plans/adr/ADR-017-repository-independence-and-runtime-service-boundaries.md)
 and the [dependency inventory](docs/implementation/repository-independence-inventory.md).
 
+This rule is fully implemented and verified across all four repositories. See the
+[completion report](docs/implementation/repository-independence-report.md) for the
+audit matrices, runtime smoke results, and known limitations.
+
 ## Repository boundaries
 
 | Local folder | GitHub repository | Owns |
 | --- | --- | --- |
-| `core` (this repo) | [`matjeroapps/core`](https://github.com/matjeroapps/core) | Commerce/theme/market/storefront domain logic, shared `packages/*`, centralized `migrations/`, background workers, local infrastructure |
+| `core` (this repo) | [`matjeroapps/core`](https://github.com/matjeroapps/core) | Commerce/theme/market/storefront domain logic, Core-internal `packages/*` and `pkg/*`, centralized `migrations/`, background workers, local infrastructure |
 | `admin` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) | Admin API, admin OpenAPI document, admin dashboard |
 | `seller` | [`matjeroapps/seller`](https://github.com/matjeroapps/seller) | Seller API + Storefront API, theme HTTP surface, seller dashboard, storefront web app |
 | `supplier` | [`matjeroapps/supplier`](https://github.com/matjeroapps/supplier) | Supplier API, supplier OpenAPI document, supplier dashboard |
