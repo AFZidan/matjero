@@ -80,6 +80,8 @@ func (r Repository) CreateSupplierProductAtomically(ctx context.Context, supplie
 		supplierProduct.SupplierCode = draft.SupplierCode
 		supplierProduct.Status = draft.Status
 
+		// No revision bump: a brand-new product is not listed by any store yet, so
+		// no storefront output changes until a seller imports it.
 		return setProductCategoriesTx(ctx, tx, productID, draft.CategoryIDs)
 	})
 	if err != nil {
@@ -160,6 +162,8 @@ func (r Repository) CreateSupplierOfferAtomically(ctx context.Context, supplierI
 			}
 		}
 
+		// No revision bump: a brand-new offer has no seller listings yet, so no
+		// storefront output changes until a seller imports it.
 		return nil
 	})
 	if err != nil {

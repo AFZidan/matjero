@@ -39,6 +39,7 @@ func TestStoreResolverIntegration(t *testing.T) {
 		"000004_admin_supplier_seller_platforms",
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
+		"000008_storefront_revisions",
 	} {
 		applySQLFileStorefront(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))
 	}

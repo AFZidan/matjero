@@ -50,6 +50,16 @@ caller-supplied seller, supplier or store identifier as an authorization
 decision. Actors must strip any client-supplied copy of these headers before
 setting trusted values.
 
+Successful public storefront reads carry the authoritative cache generation of
+the resolved store:
+
+  X-Matjero-Storefront-Revision: <opaque generation>
+
+The generation is read before the payload, so it is a lower bound on the
+payload's freshness. A caching actor stores each response under the generation
+returned with it, never under one it probed earlier, and treats the value as
+opaque.
+
 Errors use a closed vocabulary (not_found, invalid_argument, validation_error,
 unauthorized, forbidden, conflict, market_mismatch, insufficient_inventory,
 schema_mismatch, unsafe_content, preview_unavailable, storefront_unavailable,
@@ -127,6 +137,21 @@ func internalRoutes() []openapi.RouteSpec {
 	pageParams := []openapi.ParameterSpec{openapi.LimitParam(), openapi.OffsetParam()}
 	pathParam := openapi.PathStringParam
 
+	// Successful public storefront reads are labelled with the cache generation
+	// their payload is at least as new as, so a downstream cache stores each
+	// payload under the generation that produced it instead of one it probed
+	// earlier.
+	revisionHeader := []openapi.HeaderSpec{{
+		Name:        HeaderStorefrontRevision,
+		Description: "Opaque public cache generation of the resolved store",
+		Schema:      int64(0),
+	}}
+	storefrontReadResponses := func(description string, body any) []openapi.ResponseSpec {
+		ok := openapi.OKResponse(description, body)
+		ok.Headers = revisionHeader
+		return []openapi.ResponseSpec{ok, unauthorized, forbidden, notFound, serverError}
+	}
+
 	return []openapi.RouteSpec{
 		// --- Markets ---
 		{
@@ -144,22 +169,34 @@ func internalRoutes() []openapi.RouteSpec {
 
 		// --- Storefront ---
 		{
+			Method: http.MethodGet, Path: "/internal/v1/storefront/revision", OperationID: "internalGetStorefrontRevision",
+			Summary: "Read the public cache generation for a trusted host",
+			Description: "Returns the authoritative, opaque cache generation of the store resolved from " +
+				"X-Matjero-Storefront-Host. It changes whenever anything the public storefront renders for that " +
+				"store changes, so a cache that includes it in its key is invalidated by moving to a new " +
+				"namespace instead of deleting entries. An unknown host, an inactive domain and an inactive " +
+				"store are indistinguishable and yield no revision, which stops a cache from serving a store " +
+				"that no longer resolves publicly. The number carries no business meaning.",
+			Tags:      []string{"Storefront"},
+			Responses: readResponses("Storefront cache generation", StorefrontRevisionResponse{}),
+		},
+		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/store", OperationID: "internalGetStorefrontStore",
 			Summary:     "Resolve the storefront bootstrap for a trusted host",
 			Description: "Tenant identity comes only from X-Matjero-Storefront-Host. The request Host and X-Forwarded-Host are ignored.",
 			Tags:        []string{"Storefront"},
-			Responses:   readResponses("Storefront bootstrap", storefrontStoreResponse{}),
+			Responses:   storefrontReadResponses("Storefront bootstrap", storefrontStoreResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/categories", OperationID: "internalListStorefrontCategories",
 			Summary: "List public categories", Tags: []string{"Storefront"},
-			Responses: readResponses("Category collection", CollectionResponse[storefront.CategoryNode]{}),
+			Responses: storefrontReadResponses("Category collection", CollectionResponse[storefront.CategoryNode]{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/categories/{slug}", OperationID: "internalGetStorefrontCategory",
 			Summary: "Get a public category", Tags: []string{"Storefront"},
 			Parameters: []openapi.ParameterSpec{pathParam("slug", "Category slug")},
-			Responses:  readResponses("Category", storefrontCategoryResponse{}),
+			Responses:  storefrontReadResponses("Category", storefrontCategoryResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/products", OperationID: "internalListStorefrontProducts",
@@ -172,13 +209,13 @@ func internalRoutes() []openapi.RouteSpec {
 				openapi.StringParam("max_price", "Maximum price in minor units", false),
 				openapi.LimitParam(), openapi.OffsetParam(),
 			},
-			Responses: readResponses("Product page", storefrontProductPageResponse{}),
+			Responses: storefrontReadResponses("Product page", storefrontProductPageResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/products/{slug}", OperationID: "internalGetStorefrontProduct",
 			Summary: "Get a public product", Tags: []string{"Storefront"},
 			Parameters: []openapi.ParameterSpec{pathParam("slug", "Product slug")},
-			Responses:  readResponses("Product detail", storefrontProductResponse{}),
+			Responses:  storefrontReadResponses("Product detail", storefrontProductResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/search", OperationID: "internalSearchStorefrontProducts",
@@ -192,7 +229,7 @@ func internalRoutes() []openapi.RouteSpec {
 				openapi.StringParam("max_price", "Maximum price in minor units", false),
 				openapi.LimitParam(), openapi.OffsetParam(),
 			},
-			Responses: readResponses("Product page", storefrontProductPageResponse{}),
+			Responses: storefrontReadResponses("Product page", storefrontProductPageResponse{}),
 		},
 
 		// --- Sellers ---

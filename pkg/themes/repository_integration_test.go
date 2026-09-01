@@ -54,6 +54,7 @@ func setupThemesTest(t *testing.T) themesTestEnv {
 		"000005_store_domain_lifecycle.up.sql",
 		"000006_store_domain_integrity.up.sql",
 		"000007_theme_engine_schema.up.sql",
+		"000008_storefront_revisions.up.sql",
 	} {
 		applyMigration(t, db, m)
 	}

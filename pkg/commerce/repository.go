@@ -234,6 +234,10 @@ func createStoreInTx(ctx context.Context, tx pgx.Tx, sellerID, marketCode, code,
 		return Store{}, err
 	}
 
+	if err := initStorefrontRevision(ctx, tx, id); err != nil {
+		return Store{}, err
+	}
+
 	created.ID = id
 	created.SellerID = sellerID
 	created.MarketCode = marketCode
@@ -390,13 +394,17 @@ func (r Repository) UpsertProductTranslation(ctx context.Context, translation Pr
 		return ErrInvalidInput
 	}
 
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO product_translations (product_id, locale, name, description)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (product_id, locale)
-		DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
-	`, translation.ProductID, translation.Locale, translation.Name, translation.Description)
-	return translatePGError(err, "upsert product translation")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO product_translations (product_id, locale, name, description)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (product_id, locale)
+			DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
+		`, translation.ProductID, translation.Locale, translation.Name, translation.Description); err != nil {
+			return translatePGError(err, "upsert product translation")
+		}
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByProduct, translation.ProductID)
+	})
 }
 
 func (r Repository) CreateCategory(ctx context.Context, slug string, parentCategoryID *string, status string) (Category, error) {
@@ -432,13 +440,17 @@ func (r Repository) UpsertCategoryTranslation(ctx context.Context, translation C
 	if translation.CategoryID == "" || translation.Locale == "" || translation.Name == "" {
 		return ErrInvalidInput
 	}
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO category_translations (category_id, locale, name, description)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (category_id, locale)
-		DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
-	`, translation.CategoryID, translation.Locale, translation.Name, translation.Description)
-	return translatePGError(err, "upsert category translation")
+	return r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO category_translations (category_id, locale, name, description)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (category_id, locale)
+			DO UPDATE SET name = EXCLUDED.name, description = EXCLUDED.description
+		`, translation.CategoryID, translation.Locale, translation.Name, translation.Description); err != nil {
+			return translatePGError(err, "upsert category translation")
+		}
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByCategorySubtree, translation.CategoryID)
+	})
 }
 
 func (r Repository) CreateVariant(ctx context.Context, productID, code, status string) (Variant, error) {
@@ -458,7 +470,7 @@ func (r Repository) CreateVariant(ctx context.Context, productID, code, status s
 		}
 
 		created = Variant{ID: id, ProductID: productID, Code: code, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByProduct, productID)
 	})
 	return created, err
 }
@@ -480,7 +492,7 @@ func (r Repository) CreateSKU(ctx context.Context, variantID, code, barcode, sta
 		}
 
 		created = SKU{ID: id, VariantID: variantID, Code: code, Barcode: barcode, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByVariant, variantID)
 	})
 	return created, err
 }
@@ -642,7 +654,7 @@ func (r Repository) SetSupplierOfferAvailability(ctx context.Context, supplierOf
 			return translatePGError(err, "set supplier offer availability")
 		}
 		created = SupplierOfferAvailability{ID: created.ID, SupplierOfferID: supplierOfferID, IsAvailable: isAvailable, AvailableQty: availableQty, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresBySupplierOffer, supplierOfferID)
 	})
 	return created, err
 }
@@ -663,7 +675,7 @@ func (r Repository) CreateSellerListing(ctx context.Context, storeID, productID 
 			return translatePGError(err, "create seller listing")
 		}
 		created = SellerListing{ID: id, StoreID: storeID, ProductID: productID, SupplierOfferID: supplierOfferID, MarketCode: marketCode, Status: status, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoreItself, storeID)
 	})
 	return created, err
 }
@@ -689,7 +701,7 @@ func (r Repository) SetSellerListingPrice(ctx context.Context, sellerListingID s
 			return translatePGError(err, "set seller listing price")
 		}
 		created = SellerListingPrice{ID: created.ID, SellerListingID: sellerListingID, Price: price, IsCurrent: created.IsCurrent, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByListing, sellerListingID)
 	})
 	return created, err
 }
@@ -731,7 +743,7 @@ func (r Repository) CreateInventorySnapshot(ctx context.Context, fulfillmentLoca
 			return translatePGError(err, "create inventory snapshot")
 		}
 		created = InventorySnapshot{ID: id, FulfillmentLocationID: fulfillmentLocationID, SKUID: skuID, OnHandQty: onHandQty, ReservedQty: 0, Version: 0, CreatedAt: created.CreatedAt, UpdatedAt: created.UpdatedAt}
-		return nil
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresBySKU, skuID)
 	})
 	return created, err
 }
@@ -803,7 +815,9 @@ func (r Repository) ReserveInventory(ctx context.Context, snapshotID string, qua
 			CreatedAt:           created.CreatedAt,
 			UpdatedAt:           created.UpdatedAt,
 		}
-		return nil
+		// A hold consumes available stock, so it can flip a product to
+		// out of stock on every storefront that sells it.
+		return bumpStorefrontRevisions(ctx, tx, revisionStoresByInventorySnapshot, inventorySnapshotID)
 	})
 	return created, err
 }

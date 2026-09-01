@@ -21,6 +21,7 @@ func applyStoreDomainMigrations(t *testing.T, db *database.Pool) {
 		"000004_admin_supplier_seller_platforms",
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
+		"000008_storefront_revisions",
 	} {
 		applySQLFile(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))
 	}
@@ -179,6 +180,8 @@ func TestMigrationsReplay(t *testing.T) {
 		"000004_admin_supplier_seller_platforms",
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
+		"000007_theme_engine_schema",
+		"000008_storefront_revisions",
 	}
 	for _, m := range migrations {
 		applySQLFile(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))

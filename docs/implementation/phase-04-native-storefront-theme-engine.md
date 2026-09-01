@@ -287,12 +287,15 @@ Entities:
 - No dangerous wildcard Redis scans for invalidation.
 - Prefer: versioned cache namespaces, targeted invalidation, event-driven invalidation, revision-based cache keys.
 - Strategy: Redis + revision-based versioned keys. Revisions bumped transactionally on writes. Short TTL safety net. No outbox relay in Phase 4 (deferred to Phase 5+; no second event system).
+- Split across the ADR-017 boundary: Core owns the authoritative per-store revision (`storefront_revisions`) and bumps it inside the transaction of the business write; Seller owns the Redis client and the cache keys and never holds revision truth. Since tenant identity on the public path is the trusted host, Seller needs no Core store identifier to key its cache safely.
 
 ### 4.26 Cache Invalidation
 
 - Storefront must not indefinitely serve stale data after changes to: Store, Theme, Theme Configuration, Seller Listing, Product, Category, Seller Price, Availability.
 - Use existing outbox/domain-event architecture where appropriate — but Phase 4 uses revision-based invalidation (no new event system).
 - Exact consistency not required for every browse view, but invalidation behavior must be explicit and testable.
+- Nothing is ever deleted to invalidate. A revision bump moves every later lookup into a new namespace, and the abandoned entries expire through the TTL safety net, which is what removes any need for a wildcard scan or a key registry.
+- Invalidation is scoped to the stores whose public output changed. A record shared between stores (one supplier product or offer listed by several) bumps every store that lists it; a store that does not list it is untouched. Draft-only theme work never bumps, because it is invisible to customers until it is published.
 
 ### 4.27 Next.js Rendering Strategy
 
@@ -561,18 +564,27 @@ Phase 4 is complete only when all completion criteria are met.
 - **Acceptance Criteria**: All catalog tests pass; no supplier-privacy leakage; seller listing price only.
 
 ### P4.4 — Storefront Caching
-- **Goal**: Redis with revision-based versioned keys.
+- **Goal**: Redis-backed public storefront response cache, invalidated by authoritative per-store revisions.
 - **Dependencies**: P4.3.
-- **Branch**: `feature/p4-storefront-caching`
-- **Backend Work**:
-  - New `packages/cache`: Redis client wrapper, revision-based versioned key scheme, targeted invalidation by revision bump, TTL safety net, no wildcard scans.
-  - Revision counters bumped transactionally in `internal/commerce` service writes that affect storefront views.
-  - storefront-api integrates cache on catalog reads.
+- **Branch**: `feature/p4-storefront-caching` (in both `matjeroapps/core` and `matjeroapps/seller`).
+- **Ownership after the multi-repository split**: Core owns the authoritative revision state and bumps it transactionally; Seller owns the Redis client, the cache keys, and the cache behaviour. Core holds no Redis dependency and Seller holds no revision truth.
+- **Backend Work (Core — `github.com/matjeroapps/core`)**:
+  - Migration `000008_storefront_revisions.{up,down}.sql`: one `storefront_revisions` row per store (`store_id` PK/FK `ON DELETE CASCADE`, `revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1)`), backfilled for every existing store. A store with no row reads as revision 1, so a store created by an older path is never left without a generation.
+  - `pkg/commerce/storefront_revision.go`: the store selectors for every storefront-affecting write and one atomic upsert bump (`INSERT ... ON CONFLICT DO UPDATE SET revision = revision + 1`). Bumps run on the transaction of the business write, so a rolled-back mutation never advances the revision and concurrent writes cannot lose a bump. New stores are initialized inside `createStoreInTx`.
+  - Bumped writes: store status/profile, seller listing create/price/status, product translation/status/slug/categories, variant and SKU creation, category translation/status/slug/reparent (the whole subtree, so a rename or moderation of an ancestor invalidates every store publishing a descendant), supplier offer status and availability, inventory snapshot creation, inventory adjustment, inventory reservation, fulfillment location status. Records shared between stores (one product or offer listed by several stores) bump every affected store.
+  - Deliberately not bumped: supplier wholesale price (never public), theme draft edit/discard/preview, seller/supplier/supplier-market status, and creation of products or offers no store lists yet.
+  - `pkg/themes/storefront_revision.go`: the Theme Engine's own bump, used by install/switch, deactivate, configuration create, version upgrade, and publish. Publishing is the only configuration write that advances the revision, because a draft is invisible to customers.
+  - `pkg/storefront/revision.go`: `RevisionReader` resolves a trusted host through the existing `StoreResolver` to a revision. An unknown host, an inactive domain and an inactive store are indistinguishable and yield no revision, which is what stops a downstream cache from serving a store that stopped resolving publicly.
+  - `internal/coreapi`: `GET /internal/v1/storefront/revision` (seller service caller only, tenant from `X-Matjero-Storefront-Host`, `{"revision": <n>}`), and every successful public storefront read is labelled `X-Matjero-Storefront-Revision`. The revision is read before the catalog query, so the label is a lower bound on the payload's freshness and the read/write race cannot cache older data under a newer generation.
+- **Backend Work (Seller — `github.com/matjeroapps/seller`)**:
+  - Seller-owned Redis client and configuration; cache disabled by default and never required to start `storefront-api`.
+  - Revisioned, tenant-safe cache keys over the six public GET routes, built from the trusted normalized host, locale, resource identity, canonicalized query, and the revision returned by Core. No wildcard invalidation: a revision change moves lookups into a new namespace and abandoned entries expire through a short TTL safety net.
+  - Redis failure degrades to a normal Core call; Core unavailability does not serve unvalidated cached content.
 - **Frontend Work**: None.
-- **Database Changes**: Revision columns on affected tables (part of 000005/000006 or separate migration).
-- **API/OpenAPI Changes**: None.
-- **Tests**: Cache hit/miss, revision invalidation, cross-store collision prevention, Redis-unavailable degradation.
-- **Acceptance Criteria**: All cache tests pass; no cross-store collisions; graceful degradation.
+- **Database Changes**: `000008_storefront_revisions` (Core).
+- **API/OpenAPI Changes**: Core internal API gains the revision route and the revision response header; regenerate `docs/api/internal/openapi.json`. Seller's public storefront contract is unchanged.
+- **Tests**: Core (real PostgreSQL): initial revision, missing-row default, per-write bump scope in both directions, shared-record multi-store invalidation, non-public writes not bumping, rollback leaving the revision unchanged, concurrent bumps not lost, cascade on store deletion, theme publish vs draft, and through `core-api`: host-scoped revisions, service-auth and caller scoping, host spoofing, unknown/inactive storefronts, revision header on every public read and absent on failures. Seller: cache hit/miss, revision invalidation, cross-store and locale isolation, query canonicalization, cache-poisoning attempts, Redis-unavailable and Core-unavailable degradation, oversized payloads, and unchanged public OpenAPI.
+- **Acceptance Criteria**: Revisions are authoritative and transactional; no cross-store collisions; no wildcard invalidation; graceful Redis degradation; no Core Go dependency in Seller; no RabbitMQ used for cache invalidation.
 
 ### P4.5 — Storefront Rendering
 - **Goal**: Multi-tenant Next.js storefront with theme registry.

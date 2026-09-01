@@ -59,6 +59,24 @@ func (s *stubStores) Resolve(ctx context.Context, domain string) (storefront.Res
 	return s.resolved, s.err
 }
 
+// stubRevisions stands in for the authoritative revision reader. It records the
+// host it was probed with so the tests can prove tenant authority never comes
+// from anywhere but the trusted internal header.
+type stubRevisions struct {
+	revision int64
+	err      error
+	gotHost  string
+}
+
+func (s *stubRevisions) Revision(ctx context.Context, host string) (int64, error) {
+	s.gotHost = host
+	return s.revision, s.err
+}
+
+func (s *stubRevisions) RevisionFor(ctx context.Context, scope storefront.CatalogScope) (int64, error) {
+	return s.revision, s.err
+}
+
 // --- helpers ---
 
 const (

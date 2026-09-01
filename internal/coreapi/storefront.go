@@ -19,6 +19,18 @@ import (
 // price-source rules, tenant isolation, market isolation, availability, privacy
 // rules, search, filters and pagination are never reimplemented by an actor.
 
+// HeaderStorefrontRevision labels a successful public read with the cache
+// generation its payload is guaranteed to be at least as new as.
+//
+// A downstream cache stores the response under this value, never under a
+// revision it probed earlier. The revision is read before the catalog query, so
+// the payload can only be newer than the label, never older. That ordering is
+// what makes the label safe: caching fresher data under an older generation is
+// harmless because that generation is abandoned on the next probe, whereas
+// caching older data under a newer generation would serve stale content for the
+// whole entry lifetime.
+const HeaderStorefrontRevision = "X-Matjero-Storefront-Revision"
+
 // scopeFor resolves the tenant from the trusted storefront host forwarded by the
 // actor and binds it to the negotiated locale.
 //
@@ -48,98 +60,114 @@ func (s *server) scopeFor(w http.ResponseWriter, r *http.Request) (storefront.Ca
 	return scope, true
 }
 
-func (s *server) handleStorefrontStore(w http.ResponseWriter, r *http.Request) {
+// storefrontRead performs one public catalog read for the resolved tenant and
+// labels the successful response with its cache generation.
+//
+// The generation is read before the payload so the label is a lower bound on the
+// payload's freshness, and it is only emitted on success: an unavailable or
+// invalid request discloses no generation at all.
+func (s *server) storefrontRead(w http.ResponseWriter, r *http.Request, read func(storefront.CatalogScope) (any, error)) {
 	scope, ok := s.scopeFor(w, r)
 	if !ok {
 		return
 	}
-	bootstrap, err := s.deps.Catalog.Bootstrap(r.Context(), scope)
+	revision, err := s.deps.Revisions.RevisionFor(r.Context(), scope)
 	if err != nil {
 		writeDomainError(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, storefrontStoreResponse{Store: bootstrap})
+	payload, err := read(scope)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	w.Header().Set(HeaderStorefrontRevision, strconv.FormatInt(revision, 10))
+	httpx.WriteJSON(w, http.StatusOK, payload)
+}
+
+// handleStorefrontRevision answers the authoritative cache generation for a
+// trusted host.
+//
+// It is the probe a downstream cache calls before trusting a cached payload, so
+// it deliberately fails the same way every other public read does: an unknown
+// host, an inactive domain and an inactive store are indistinguishable, and none
+// of them yields a revision. That is what stops a cache from continuing to serve
+// a store that stopped resolving publicly.
+func (s *server) handleStorefrontRevision(w http.ResponseWriter, r *http.Request) {
+	host := serviceauth.StorefrontHostFrom(r)
+	if host == "" {
+		writeError(w, CodeStorefrontUnavailable)
+		return
+	}
+	revision, err := s.deps.Revisions.Revision(r.Context(), host)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, StorefrontRevisionResponse{Revision: revision})
+}
+
+func (s *server) handleStorefrontStore(w http.ResponseWriter, r *http.Request) {
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		bootstrap, err := s.deps.Catalog.Bootstrap(r.Context(), scope)
+		return storefrontStoreResponse{Store: bootstrap}, err
+	})
 }
 
 func (s *server) handleStorefrontCategories(w http.ResponseWriter, r *http.Request) {
-	scope, ok := s.scopeFor(w, r)
-	if !ok {
-		return
-	}
-	items, err := s.deps.Catalog.Categories(r.Context(), scope)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, CollectionResponse[storefront.CategoryNode]{Items: items})
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		items, err := s.deps.Catalog.Categories(r.Context(), scope)
+		return CollectionResponse[storefront.CategoryNode]{Items: items}, err
+	})
 }
 
 func (s *server) handleStorefrontCategory(w http.ResponseWriter, r *http.Request) {
-	scope, ok := s.scopeFor(w, r)
-	if !ok {
-		return
-	}
-	category, err := s.deps.Catalog.CategoryBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, storefrontCategoryResponse{Category: category})
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		category, err := s.deps.Catalog.CategoryBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
+		return storefrontCategoryResponse{Category: category}, err
+	})
 }
 
 func (s *server) handleStorefrontProducts(w http.ResponseWriter, r *http.Request) {
-	scope, ok := s.scopeFor(w, r)
-	if !ok {
-		return
-	}
-	query, err := parseProductQuery(r)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	page, err := s.deps.Catalog.Products(r.Context(), scope, query)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, newStorefrontProductPage(page))
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		query, err := parseProductQuery(r)
+		if err != nil {
+			return nil, err
+		}
+		page, err := s.deps.Catalog.Products(r.Context(), scope, query)
+		return newStorefrontProductPage(page), err
+	})
 }
 
 func (s *server) handleStorefrontProduct(w http.ResponseWriter, r *http.Request) {
-	scope, ok := s.scopeFor(w, r)
-	if !ok {
-		return
-	}
-	product, err := s.deps.Catalog.ProductBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, storefrontProductResponse{Product: product})
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		product, err := s.deps.Catalog.ProductBySlug(r.Context(), scope, chi.URLParam(r, "slug"))
+		return storefrontProductResponse{Product: product}, err
+	})
 }
 
 func (s *server) handleStorefrontSearch(w http.ResponseWriter, r *http.Request) {
-	scope, ok := s.scopeFor(w, r)
-	if !ok {
-		return
-	}
-	query, err := parseProductQuery(r)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	page, err := s.deps.Catalog.Search(r.Context(), scope, query.Keyword, query)
-	if err != nil {
-		writeDomainError(w, err)
-		return
-	}
-	httpx.WriteJSON(w, http.StatusOK, newStorefrontProductPage(page))
+	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
+		query, err := parseProductQuery(r)
+		if err != nil {
+			return nil, err
+		}
+		page, err := s.deps.Catalog.Search(r.Context(), scope, query.Keyword, query)
+		return newStorefrontProductPage(page), err
+	})
 }
 
 // --- Storefront response contracts ---
 //
 // These mirror the shapes the seller storefront API already publishes so the
 // actor's public contract is unchanged by the transport migration.
+
+// StorefrontRevisionResponse carries a store's public cache generation. The
+// number is opaque: a consumer compares it for equality and must not infer any
+// business meaning from its value.
+type StorefrontRevisionResponse struct {
+	Revision int64 `json:"revision"`
+}
 
 type storefrontStoreResponse struct {
 	Store storefront.StoreBootstrap `json:"store"`
