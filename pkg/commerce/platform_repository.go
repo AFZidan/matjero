@@ -1022,3 +1022,26 @@ func (r Repository) GetStoreByDomain(ctx context.Context, domain string) (StoreD
 	}
 	return res, nil
 }
+
+// GetActivePrimaryStoreDomain returns the authoritative primary active domain for
+// a store. Returns ErrNotFound when no active primary domain exists.
+func (r Repository) GetActivePrimaryStoreDomain(ctx context.Context, storeID string) (StoreDomain, error) {
+	if storeID == "" {
+		return StoreDomain{}, ErrInvalidInput
+	}
+
+	var d StoreDomain
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, store_id, domain, is_primary, verified_at, status, domain_type, verification_token, last_checked_at, created_at, updated_at
+		FROM store_domains
+		WHERE store_id = $1
+		  AND is_primary = true
+		  AND status = 'active'
+	`, storeID).Scan(
+		&d.ID, &d.StoreID, &d.Domain, &d.IsPrimary, &d.VerifiedAt, &d.Status, &d.DomainType, &d.VerificationToken, &d.LastCheckedAt, &d.CreatedAt, &d.UpdatedAt,
+	)
+	if err != nil {
+		return StoreDomain{}, translatePGError(err, "get active primary store domain")
+	}
+	return d, nil
+}

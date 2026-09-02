@@ -141,6 +141,7 @@ func NewRouter(deps Dependencies) chi.Router {
 			r.Use(requireCallers(serviceauth.CallerSeller, serviceauth.CallerAdmin))
 			r.Get("/stores", server.handleListStores)
 			r.Get("/stores/{storeID}", server.handleGetStore)
+			r.Get("/stores/{storeID}/storefront-host", server.handleGetStorefrontHost)
 			r.Post("/stores/{storeID}/status", server.handleUpdateStoreStatus)
 			r.Get("/stores/{storeID}/supplier-catalog", server.handleListSupplierCatalog)
 			r.Get("/stores/{storeID}/listings", server.handleListStoreListings)
