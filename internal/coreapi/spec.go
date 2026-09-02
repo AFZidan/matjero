@@ -432,6 +432,14 @@ func internalRoutes() []openapi.RouteSpec {
 			Responses:  readResponses("Store", commerce.Store{}),
 		},
 		{
+			Method: http.MethodGet, Path: "/internal/v1/stores/{storeID}/storefront-host", OperationID: "internalGetStorefrontHost",
+			Summary:     "Get authoritative storefront host for an authorized store",
+			Description: "Returns the bare normalized active primary storefront host for an authorized store.",
+			Tags:        []string{"Stores"},
+			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
+			Responses:   readResponses("Storefront host", StorefrontHostResponse{}),
+		},
+		{
 			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/status", OperationID: "internalUpdateStoreStatus",
 			Summary: "Update a store status (admin)", Tags: []string{"Stores"},
 			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
