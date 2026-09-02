@@ -164,3 +164,31 @@ func TestStorefrontReadsDeclareRevisionHeader(t *testing.T) {
 		}
 	}
 }
+
+func TestStorefrontBootstrapDeclaresPreviewHeader(t *testing.T) {
+	var bootstrap *openapi.RouteSpec
+	routes := internalRoutes()
+	for i := range routes {
+		route := &routes[i]
+		if route.Method == http.MethodGet && route.Path == "/internal/v1/storefront/store" {
+			bootstrap = route
+			break
+		}
+	}
+	if bootstrap == nil {
+		t.Fatal("storefront bootstrap route is missing")
+	}
+
+	for _, param := range bootstrap.Parameters {
+		if param.Name == HeaderStorefrontPreview {
+			if param.In != "header" {
+				t.Fatalf("%s is documented as %q, want header", HeaderStorefrontPreview, param.In)
+			}
+			if param.Required {
+				t.Fatalf("%s must be optional", HeaderStorefrontPreview)
+			}
+			return
+		}
+	}
+	t.Fatalf("storefront bootstrap does not document %s", HeaderStorefrontPreview)
+}

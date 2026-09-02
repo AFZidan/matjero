@@ -1,6 +1,7 @@
 package coreapi
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/i18n"
 	"github.com/matjeroapps/core/pkg/storefront"
+	"github.com/matjeroapps/core/pkg/themes"
 )
 
 // Storefront handlers expose the P4.3 public catalog read model over the
@@ -30,6 +32,11 @@ import (
 // caching older data under a newer generation would serve stale content for the
 // whole entry lifetime.
 const HeaderStorefrontRevision = "X-Matjero-Storefront-Revision"
+
+// HeaderStorefrontPreview carries the signed, short-lived draft theme preview
+// token from the seller-owned storefront API to Core. It is an internal runtime
+// contract and never replaces service authentication.
+const HeaderStorefrontPreview = "X-Matjero-Storefront-Preview"
 
 // scopeFor resolves the tenant from the trusted storefront host forwarded by the
 // actor and binds it to the negotiated locale.
@@ -108,10 +115,59 @@ func (s *server) handleStorefrontRevision(w http.ResponseWriter, r *http.Request
 }
 
 func (s *server) handleStorefrontStore(w http.ResponseWriter, r *http.Request) {
+	previewToken := strings.TrimSpace(r.Header.Get(HeaderStorefrontPreview))
+	if previewToken != "" {
+		s.handleStorefrontStorePreview(w, r, previewToken)
+		return
+	}
+
 	s.storefrontRead(w, r, func(scope storefront.CatalogScope) (any, error) {
 		bootstrap, err := s.deps.Catalog.Bootstrap(r.Context(), scope)
 		return storefrontStoreResponse{Store: bootstrap}, err
 	})
+}
+
+func (s *server) handleStorefrontStorePreview(w http.ResponseWriter, r *http.Request, previewToken string) {
+	scope, ok := s.scopeFor(w, r)
+	if !ok {
+		return
+	}
+	bootstrap, err := s.deps.Catalog.Bootstrap(r.Context(), scope)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	previewTheme, err := s.deps.Themes.ResolveStorefrontPreview(r.Context(), previewToken, scope.StoreID())
+	if err != nil {
+		writePreviewError(w, err)
+		return
+	}
+	bootstrap.Theme = &storefront.StoreTheme{
+		Key:                   previewTheme.Key,
+		Version:               previewTheme.Version,
+		Configuration:         previewTheme.Configuration,
+		ConfigurationRevision: previewTheme.DraftRevision,
+	}
+	w.Header().Set("Cache-Control", "private, no-store")
+	httpx.WriteJSON(w, http.StatusOK, storefrontStoreResponse{Store: bootstrap})
+}
+
+func writePreviewError(w http.ResponseWriter, err error) {
+	if errors.Is(err, themes.ErrPreviewNotConfigured) {
+		writeError(w, CodePreviewUnavailable)
+		return
+	}
+	if errors.Is(err, themes.ErrSchemaMismatch) {
+		writeError(w, CodeSchemaMismatch)
+		return
+	}
+	if errors.Is(err, themes.ErrUnsafeContent) {
+		writeError(w, CodeUnsafeContent)
+		return
+	}
+	// Invalid, stale, cross-store and missing preview state all collapse into
+	// the same storefront-unavailable outcome to avoid a token validity oracle.
+	writeError(w, CodeStorefrontUnavailable)
 }
 
 func (s *server) handleStorefrontCategories(w http.ResponseWriter, r *http.Request) {

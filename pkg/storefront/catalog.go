@@ -94,6 +94,11 @@ func NewCatalogScope(store ResolvedStore, locale i18n.Locale) (CatalogScope, err
 // Locale reports the validated locale the scope reads translations for.
 func (s CatalogScope) Locale() i18n.Locale { return s.locale }
 
+// StoreID reports the host-resolved store bound to this scope. It is read-only
+// tenant context for Core-internal integrations and is never serialized into a
+// public storefront payload.
+func (s CatalogScope) StoreID() string { return s.storeID }
+
 func validateLocale(locale i18n.Locale) (i18n.Locale, error) {
 	if locale == "" {
 		return i18n.Default(), nil

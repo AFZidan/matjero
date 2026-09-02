@@ -2,6 +2,7 @@ package themes
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -276,4 +277,100 @@ func (s Service) CreatePreviewToken(ctx context.Context, sellerID, storeID strin
 		return "", err
 	}
 	return s.IssuePreviewToken(inst.StoreID, inst.ID, cfg.DraftRevision)
+}
+
+// ResolveStorefrontPreview validates a signed preview token against the
+// host-resolved store and current active installation, then returns the current
+// draft theme for rendering. The token is a short-lived read capability: no
+// seller subject is involved here, and the store authority must come from the
+// caller's trusted host resolution.
+func (s Service) ResolveStorefrontPreview(ctx context.Context, token, resolvedStoreID string) (StorefrontPreviewTheme, error) {
+	claims, err := s.storefrontPreviewClaims(token, resolvedStoreID)
+	if err != nil {
+		return StorefrontPreviewTheme{}, err
+	}
+	inst, cfg, err := s.currentPreviewConfiguration(ctx, claims, resolvedStoreID)
+	if err != nil {
+		return StorefrontPreviewTheme{}, err
+	}
+	theme, version, err := s.currentPreviewTheme(ctx, inst)
+	if err != nil {
+		return StorefrontPreviewTheme{}, err
+	}
+	if err := ValidateConfiguration(version.ConfigurationSchema, cfg.DraftConfig); err != nil {
+		return StorefrontPreviewTheme{}, err
+	}
+	if err := RejectUnsafeContent(cfg.DraftConfig); err != nil {
+		return StorefrontPreviewTheme{}, err
+	}
+
+	return StorefrontPreviewTheme{
+		Key:           theme.Key,
+		Version:       version.Version,
+		Configuration: cfg.DraftConfig,
+		DraftRevision: cfg.DraftRevision,
+	}, nil
+}
+
+func (s Service) storefrontPreviewClaims(token, resolvedStoreID string) (PreviewClaims, error) {
+	if token == "" || resolvedStoreID == "" {
+		return PreviewClaims{}, ErrNotFound
+	}
+	claims, err := s.VerifyPreviewToken(token)
+	if err != nil {
+		if errors.Is(err, ErrPreviewNotConfigured) {
+			return PreviewClaims{}, err
+		}
+		return PreviewClaims{}, ErrNotFound
+	}
+	if claims.StoreID != resolvedStoreID {
+		return PreviewClaims{}, ErrNotFound
+	}
+	return claims, nil
+}
+
+func (s Service) currentPreviewConfiguration(ctx context.Context, claims PreviewClaims, resolvedStoreID string) (ThemeInstallation, ThemeConfiguration, error) {
+	inst, err := s.repo.GetInstallationByStore(ctx, resolvedStoreID)
+	if err != nil {
+		return ThemeInstallation{}, ThemeConfiguration{}, err
+	}
+	if claims.InstallationID != inst.ID {
+		return ThemeInstallation{}, ThemeConfiguration{}, ErrNotFound
+	}
+
+	cfg, err := s.repo.GetConfiguration(ctx, inst.ID)
+	if err != nil {
+		return ThemeInstallation{}, ThemeConfiguration{}, err
+	}
+	if claims.DraftRevision != cfg.DraftRevision {
+		return ThemeInstallation{}, ThemeConfiguration{}, ErrNotFound
+	}
+	return inst, cfg, nil
+}
+
+func (s Service) currentPreviewTheme(ctx context.Context, inst ThemeInstallation) (Theme, ThemeVersion, error) {
+	theme, err := s.repo.GetTheme(ctx, inst.ThemeID)
+	if err != nil {
+		return Theme{}, ThemeVersion{}, err
+	}
+	if !themeRenderable(theme) {
+		return Theme{}, ThemeVersion{}, ErrNotFound
+	}
+
+	version, err := s.repo.GetThemeVersion(ctx, inst.ThemeVersionID)
+	if err != nil {
+		return Theme{}, ThemeVersion{}, err
+	}
+	if !themeVersionRenderable(version) {
+		return Theme{}, ThemeVersion{}, ErrNotFound
+	}
+	return theme, version, nil
+}
+
+func themeRenderable(theme Theme) bool {
+	return theme.Status == ThemeStatusActive || theme.Status == ThemeStatusDeprecated
+}
+
+func themeVersionRenderable(version ThemeVersion) bool {
+	return version.Status == ThemeVersionStatusPublished || version.Status == ThemeVersionStatusDeprecated
 }

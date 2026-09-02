@@ -21,6 +21,15 @@ type PreviewClaims struct {
 	Exp            int64  `json:"exp"`
 }
 
+// StorefrontPreviewTheme is the draft presentation contract a valid preview
+// token may expose for the host-resolved store.
+type StorefrontPreviewTheme struct {
+	Key           string
+	Version       string
+	Configuration map[string]any
+	DraftRevision int
+}
+
 // IssuePreviewToken creates a signed, short-lived preview token for the given
 // store installation draft. The signing secret is server-side configured and is
 // never embedded in the token.

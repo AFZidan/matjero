@@ -2,9 +2,11 @@ package themes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +95,24 @@ func (e themesTestEnv) defaultThemeVersion(t *testing.T) ThemeVersion {
 		t.Fatalf("get default version: %v", err)
 	}
 	return v
+}
+
+func defaultConfigWithHeroTitle(t *testing.T, title string) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(DefaultConfiguration)
+	if err != nil {
+		t.Fatalf("marshal default config: %v", err)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("clone default config: %v", err)
+	}
+	hero, ok := cfg["hero"].(map[string]any)
+	if !ok {
+		t.Fatal("default config hero is not an object")
+	}
+	hero["title"] = title
+	return cfg
 }
 
 func TestThemePersistence(t *testing.T) {
@@ -587,6 +607,198 @@ func TestPreviewTokenRequiresConfiguredSecret(t *testing.T) {
 	if _, err := unconfigured.VerifyPreviewToken(token); !errors.Is(err, ErrPreviewNotConfigured) {
 		t.Fatalf("expected ErrPreviewNotConfigured on verify, got %v", err)
 	}
+}
+
+func TestResolveStorefrontPreviewReturnsCurrentDraftTheme(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := e.svc.UpdateDraftConfiguration(e.ctx, e.sellerA, e.storeA, defaultConfigWithHeroTitle(t, "Draft")); err != nil {
+		t.Fatalf("update draft: %v", err)
+	}
+	token, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	preview, err := e.svc.ResolveStorefrontPreview(e.ctx, token, e.storeA)
+	if err != nil {
+		t.Fatalf("resolve preview: %v", err)
+	}
+	if preview.Key != DefaultThemeKey || preview.Version != DefaultThemeVersion {
+		t.Fatalf("theme identity = %+v", preview)
+	}
+	hero, _ := preview.Configuration["hero"].(map[string]any)
+	if hero["title"] != "Draft" {
+		t.Fatalf("hero title = %q, want Draft", hero["title"])
+	}
+	if preview.DraftRevision != 1 {
+		t.Fatalf("draft revision = %d, want 1", preview.DraftRevision)
+	}
+}
+
+func TestResolveStorefrontPreviewFailsClosedForInvalidTokens(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install store A: %v", err)
+	}
+	if _, err := e.svc.Install(e.ctx, e.sellerB, e.storeB, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install store B: %v", err)
+	}
+	instA, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation A: %v", err)
+	}
+	cfgA, err := e.repo.GetConfiguration(e.ctx, instA.ID)
+	if err != nil {
+		t.Fatalf("get config A: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		token string
+		store string
+	}{
+		{"malformed token", "not-a-token", e.storeA},
+		{"tampered signature", mustPreviewToken(t, e.svc, e.storeA, instA.ID, cfgA.DraftRevision) + "x", e.storeA},
+		{"wrong store", mustPreviewToken(t, e.svc, e.storeA, instA.ID, cfgA.DraftRevision), e.storeB},
+		{"wrong installation", mustPreviewToken(t, e.svc, e.storeA, "00000000-0000-0000-0000-000000000000", cfgA.DraftRevision), e.storeA},
+		{"stale draft revision", mustPreviewToken(t, e.svc, e.storeA, instA.ID, cfgA.DraftRevision+1), e.storeA},
+		{"empty token", "", e.storeA},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := e.svc.ResolveStorefrontPreview(e.ctx, tc.token, tc.store); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("expected ErrNotFound, got %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveStorefrontPreviewRejectsExpiredToken(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	svc := NewService(e.repo, commerce.NewRepository(e.pool.Pool), Options{
+		PreviewSecret: []byte("test-secret"),
+		Clock:         func() time.Time { return now },
+	})
+	token, err := svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+
+	now = now.Add(16 * time.Minute)
+	if _, err := svc.ResolveStorefrontPreview(e.ctx, token, e.storeA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for expired token, got %v", err)
+	}
+}
+
+func TestResolveStorefrontPreviewRequiresConfiguredSecret(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	token, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	unconfigured := NewService(e.repo, commerce.NewRepository(e.pool.Pool), Options{})
+	if _, err := unconfigured.ResolveStorefrontPreview(e.ctx, token, e.storeA); !errors.Is(err, ErrPreviewNotConfigured) {
+		t.Fatalf("expected ErrPreviewNotConfigured, got %v", err)
+	}
+}
+
+func TestResolveStorefrontPreviewRequiresCurrentInstallationAndRevision(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	token, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if _, err := e.svc.UpdateDraftConfiguration(e.ctx, e.sellerA, e.storeA, defaultConfigWithHeroTitle(t, "Next draft")); err != nil {
+		t.Fatalf("update draft: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, token, e.storeA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected stale token to fail, got %v", err)
+	}
+
+	fresh, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue fresh token: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, fresh, e.storeA); err != nil {
+		t.Fatalf("fresh token should resolve: %v", err)
+	}
+
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("switch theme: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, fresh, e.storeA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected switched installation token to fail, got %v", err)
+	}
+	switched, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue switched token: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, switched, e.storeA); err != nil {
+		t.Fatalf("switched token should resolve: %v", err)
+	}
+}
+
+func TestResolveStorefrontPreviewFailsWhenCurrentInstallationIsMissing(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	token, err := e.svc.CreatePreviewToken(e.ctx, e.sellerA, e.storeA)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if _, err := e.pool.Exec(e.ctx, `UPDATE theme_installations SET status='inactive' WHERE store_id=$1`, e.storeA); err != nil {
+		t.Fatalf("remove active installation: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, token, e.storeA); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestResolveStorefrontPreviewRejectsInconsistentStoredDraft(t *testing.T) {
+	e := setupThemesTest(t)
+	if _, err := e.svc.Install(e.ctx, e.sellerA, e.storeA, DefaultThemeKey, ""); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	inst, err := e.repo.GetInstallationByStore(e.ctx, e.storeA)
+	if err != nil {
+		t.Fatalf("get installation: %v", err)
+	}
+	unsafe := defaultConfigWithHeroTitle(t, "<script>alert(1)</script>")
+	token := mustPreviewToken(t, e.svc, e.storeA, inst.ID, 1)
+	_, err = e.pool.Exec(e.ctx, `UPDATE theme_configurations SET draft_config=$2, draft_revision=1 WHERE installation_id=$1`, inst.ID, unsafe)
+	if err != nil {
+		t.Fatalf("write inconsistent draft: %v", err)
+	}
+	if _, err := e.svc.ResolveStorefrontPreview(e.ctx, token, e.storeA); !errors.Is(err, ErrUnsafeContent) {
+		t.Fatalf("expected ErrUnsafeContent, got %v", err)
+	}
+}
+
+func mustPreviewToken(t *testing.T, svc Service, storeID, installationID string, draftRevision int) string {
+	t.Helper()
+	token, err := svc.IssuePreviewToken(storeID, installationID, draftRevision)
+	if err != nil {
+		t.Fatalf("issue token: %v", err)
+	}
+	if strings.TrimSpace(token) == "" {
+		t.Fatal("issued empty preview token")
+	}
+	return token
 }
 
 func TestThemeMigrationUpDownReapply(t *testing.T) {
