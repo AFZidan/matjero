@@ -44,6 +44,7 @@ Actor APIs forward a minimal verified actor context:
 
   X-Matjero-Subject: <authenticated end-user subject>
   X-Matjero-Storefront-Host: <trusted normalized storefront host>
+  X-Matjero-Storefront-Preview: <signed theme preview token, storefront bootstrap only>
 
 Core resolves business identity from the subject itself and never trusts a
 caller-supplied seller, supplier or store identifier as an authorization
@@ -59,6 +60,11 @@ The generation is read before the payload, so it is a lower bound on the
 payload's freshness. A caching actor stores each response under the generation
 returned with it, never under one it probed earlier, and treats the value as
 opaque.
+
+A valid X-Matjero-Storefront-Preview header on GET /internal/v1/storefront/store
+returns the exact draft theme for the host-resolved store, active installation
+and current draft revision named by the token. Preview bootstrap responses are
+private, no-store responses and do not carry X-Matjero-Storefront-Revision.
 
 Errors use a closed vocabulary (not_found, invalid_argument, validation_error,
 unauthorized, forbidden, conflict, market_mismatch, insufficient_inventory,
@@ -182,10 +188,19 @@ func internalRoutes() []openapi.RouteSpec {
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/store", OperationID: "internalGetStorefrontStore",
-			Summary:     "Resolve the storefront bootstrap for a trusted host",
-			Description: "Tenant identity comes only from X-Matjero-Storefront-Host. The request Host and X-Forwarded-Host are ignored.",
-			Tags:        []string{"Storefront"},
-			Responses:   storefrontReadResponses("Storefront bootstrap", storefrontStoreResponse{}),
+			Summary: "Resolve the storefront bootstrap for a trusted host",
+			Description: "Tenant identity comes only from X-Matjero-Storefront-Host. The request Host and X-Forwarded-Host are ignored. " +
+				"Without X-Matjero-Storefront-Preview the bootstrap returns the published theme and carries X-Matjero-Storefront-Revision for public cache keys. " +
+				"With a valid preview token it returns the exact current draft theme bound to the resolved store, active installation and draft revision; preview responses are private, no-store and intentionally omit the revision header.",
+			Tags: []string{"Storefront"},
+			Parameters: []openapi.ParameterSpec{{
+				Name:        HeaderStorefrontPreview,
+				In:          "header",
+				Required:    false,
+				Description: "Optional signed theme preview token. Valid only for storefront bootstrap; not a browser authentication mechanism.",
+				Schema:      "",
+			}},
+			Responses: storefrontReadResponses("Storefront bootstrap", storefrontStoreResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/storefront/categories", OperationID: "internalListStorefrontCategories",

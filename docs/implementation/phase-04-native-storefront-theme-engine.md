@@ -170,6 +170,13 @@ Entities:
 - Preview is authorized and must not expose another seller's unpublished configuration.
 - Public users only see published configuration.
 - Preview mechanism: seller-api issues a short-lived signed, store-scoped preview token; storefront renders draft configuration only when a valid token for the resolved store is presented.
+- Runtime consumption is implemented in Core for `GET /internal/v1/storefront/store`
+  through the internal `X-Matjero-Storefront-Preview` header. Core first resolves
+  the Store from `X-Matjero-Storefront-Host`, then accepts the token only when its
+  Store, active Theme Installation, and exact current draft revision match. Valid
+  preview responses replace only `StoreBootstrap.Theme` with draft configuration,
+  omit `X-Matjero-Storefront-Revision`, and are marked `Cache-Control: private,
+  no-store`.
 
 ### 4.10 Seller Theme Management
 
