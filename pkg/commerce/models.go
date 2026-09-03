@@ -89,6 +89,79 @@ type StoreDomain struct {
 	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
+type StoreDomainResponse struct {
+	ID                string                   `json:"id"`
+	StoreID           string                   `json:"store_id"`
+	Domain            string                   `json:"domain"`
+	IsPrimary         bool                     `json:"is_primary"`
+	VerifiedAt        *time.Time               `json:"verified_at,omitempty"`
+	Status            string                   `json:"status"`
+	DomainType        string                   `json:"domain_type,omitempty"`
+	VerificationToken *string                  `json:"verification_token,omitempty"`
+	LastCheckedAt     *time.Time               `json:"last_checked_at,omitempty"`
+	Verification      *StoreDomainVerification `json:"verification,omitempty"`
+	CreatedAt         time.Time                `json:"created_at"`
+	UpdatedAt         time.Time                `json:"updated_at"`
+}
+
+func (d StoreDomain) ToResponse() StoreDomainResponse {
+	resp := StoreDomainResponse{
+		ID:                d.ID,
+		StoreID:           d.StoreID,
+		Domain:            d.Domain,
+		IsPrimary:         d.IsPrimary,
+		VerifiedAt:        d.VerifiedAt,
+		Status:            d.Status,
+		DomainType:        d.DomainType,
+		VerificationToken: d.VerificationToken,
+		LastCheckedAt:     d.LastCheckedAt,
+		CreatedAt:         d.CreatedAt,
+		UpdatedAt:         d.UpdatedAt,
+	}
+	if d.VerificationToken != nil && *d.VerificationToken != "" {
+		v := BuildVerificationDetails(d.Domain, *d.VerificationToken)
+		resp.Verification = &v
+	}
+	return resp
+}
+
+type StoreDomainAdminResponse struct {
+	ID            string     `json:"id"`
+	StoreID       string     `json:"store_id"`
+	Domain        string     `json:"domain"`
+	IsPrimary     bool       `json:"is_primary"`
+	VerifiedAt    *time.Time `json:"verified_at,omitempty"`
+	Status        string     `json:"status"`
+	DomainType    string     `json:"domain_type,omitempty"`
+	LastCheckedAt *time.Time `json:"last_checked_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func (d StoreDomain) ToAdminResponse() StoreDomainAdminResponse {
+	return StoreDomainAdminResponse{
+		ID:            d.ID,
+		StoreID:       d.StoreID,
+		Domain:        d.Domain,
+		IsPrimary:     d.IsPrimary,
+		VerifiedAt:    d.VerifiedAt,
+		Status:        d.Status,
+		DomainType:    d.DomainType,
+		LastCheckedAt: d.LastCheckedAt,
+		CreatedAt:     d.CreatedAt,
+		UpdatedAt:     d.UpdatedAt,
+	}
+}
+
+type AdminDomainFilter struct {
+	StoreID    string
+	SellerID   string
+	Status     string
+	DomainType string
+	Search     string
+	Page       Page
+}
+
 type StoreSettings struct {
 	StoreID  string         `json:"store_id"`
 	Settings map[string]any `json:"settings"`

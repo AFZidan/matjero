@@ -72,6 +72,11 @@ type StoreCreateRequest struct {
 	Settings   map[string]any `json:"settings"`
 }
 
+// CustomDomainRequest registers a custom domain for a store.
+type CustomDomainRequest struct {
+	Domain string `json:"domain"`
+}
+
 // --- Suppliers ---
 
 // SupplierResolveResponse returns the supplier identity Core resolved from a
