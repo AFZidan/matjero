@@ -35,6 +35,9 @@ func (s Service) RequestCustomStoreDomain(ctx context.Context, subject, storeID,
 }
 
 // VerifyCustomStoreDomainForSubject performs a bounded DNS lookup to verify TXT record ownership.
+// Verification is allowed ONLY when domain status is 'pending' or 'failed'.
+// Active or verified domains return safe idempotent responses without DNS lookup.
+// Disabled domains MUST be rejected with ErrConflict without performing DNS lookup or modifying state.
 func (s Service) VerifyCustomStoreDomainForSubject(ctx context.Context, subject, storeID, domainID string) (StoreDomain, error) {
 	store, err := s.repo.GetStore(ctx, storeID)
 	if err != nil {
@@ -54,10 +57,22 @@ func (s Service) VerifyCustomStoreDomainForSubject(ctx context.Context, subject,
 	if domainObj.DomainType != "custom" {
 		return StoreDomain{}, ErrInvalidInput
 	}
-	// Re-checking active or already verified domain is idempotent.
+
+	// Active or verified domains return safe idempotent response.
 	if domainObj.Status == "active" || domainObj.Status == "verified" {
 		return domainObj, nil
 	}
+
+	// Disabled domains MUST NOT be verified by Seller.
+	if domainObj.Status == "disabled" {
+		return StoreDomain{}, ErrConflict
+	}
+
+	// Verification is permitted only from pending or failed state.
+	if domainObj.Status != "pending" && domainObj.Status != "failed" {
+		return StoreDomain{}, ErrConflict
+	}
+
 	if domainObj.VerificationToken == nil || *domainObj.VerificationToken == "" {
 		return StoreDomain{}, ErrInvalidInput
 	}
@@ -82,8 +97,8 @@ func (s Service) VerifyCustomStoreDomainForSubject(ctx context.Context, subject,
 		if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())) {
 			return domainObj, ErrUnavailable
 		}
-		// Authoritative failure / NXDOMAIN -> status failed, last_checked_at updated.
-		return s.repo.UpdateDomainVerificationStatus(ctx, domainID, "failed", nil, &now)
+		// Authoritative failure / NXDOMAIN -> conditional write (only updates if still pending/failed).
+		return s.repo.MarkDomainVerificationFailedIfVerifiable(ctx, domainID, &now)
 	}
 
 	matched := false
@@ -95,10 +110,10 @@ func (s Service) VerifyCustomStoreDomainForSubject(ctx context.Context, subject,
 	}
 
 	if matched {
-		return s.repo.UpdateDomainVerificationStatus(ctx, domainID, "verified", &now, &now)
+		return s.repo.MarkDomainVerifiedIfVerifiable(ctx, domainID, &now, &now)
 	}
 
-	return s.repo.UpdateDomainVerificationStatus(ctx, domainID, "failed", nil, &now)
+	return s.repo.MarkDomainVerificationFailedIfVerifiable(ctx, domainID, &now)
 }
 
 // ActivateCustomStoreDomainForSubject promotes a verified custom domain to active primary.

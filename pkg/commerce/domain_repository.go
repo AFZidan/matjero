@@ -2,6 +2,7 @@ package commerce
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -47,25 +48,59 @@ func (r Repository) GetStoreDomain(ctx context.Context, domainID string) (StoreD
 	return d, nil
 }
 
-// UpdateDomainVerificationStatus updates a domain's status, verified_at, and last_checked_at.
-func (r Repository) UpdateDomainVerificationStatus(ctx context.Context, domainID, status string, verifiedAt, lastCheckedAt *time.Time) (StoreDomain, error) {
-	if domainID == "" || status == "" {
+// MarkDomainVerifiedIfVerifiable updates a domain to status='verified' ONLY if it is currently in 'pending' or 'failed' status.
+// If the domain is disabled, active, or verified, or if its state changed concurrently, no rows are updated and ErrConflict is returned.
+func (r Repository) MarkDomainVerifiedIfVerifiable(ctx context.Context, domainID string, verifiedAt, lastCheckedAt *time.Time) (StoreDomain, error) {
+	if domainID == "" {
 		return StoreDomain{}, ErrInvalidInput
 	}
 	var d StoreDomain
 	err := r.pool.QueryRow(ctx, `
 		UPDATE store_domains
-		SET status = $2,
-		    verified_at = COALESCE($3, verified_at),
-		    last_checked_at = $4,
+		SET status = 'verified',
+		    verified_at = COALESCE($2, verified_at),
+		    last_checked_at = $3,
 		    updated_at = now()
 		WHERE id = $1
+		  AND domain_type = 'custom'
+		  AND status IN ('pending', 'failed')
 		RETURNING id, store_id, domain, is_primary, verified_at, status, domain_type, verification_token, last_checked_at, created_at, updated_at
-	`, domainID, status, verifiedAt, lastCheckedAt).Scan(
+	`, domainID, verifiedAt, lastCheckedAt).Scan(
 		&d.ID, &d.StoreID, &d.Domain, &d.IsPrimary, &d.VerifiedAt, &d.Status, &d.DomainType, &d.VerificationToken, &d.LastCheckedAt, &d.CreatedAt, &d.UpdatedAt,
 	)
 	if err != nil {
-		return StoreDomain{}, translatePGError(err, "update domain verification status")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StoreDomain{}, ErrConflict
+		}
+		return StoreDomain{}, translatePGError(err, "mark domain verified")
+	}
+	return d, nil
+}
+
+// MarkDomainVerificationFailedIfVerifiable updates a domain to status='failed' ONLY if it is currently in 'pending' or 'failed' status.
+// If the domain is disabled, active, or verified, or if its state changed concurrently, no rows are updated and ErrConflict is returned.
+func (r Repository) MarkDomainVerificationFailedIfVerifiable(ctx context.Context, domainID string, lastCheckedAt *time.Time) (StoreDomain, error) {
+	if domainID == "" {
+		return StoreDomain{}, ErrInvalidInput
+	}
+	var d StoreDomain
+	err := r.pool.QueryRow(ctx, `
+		UPDATE store_domains
+		SET status = 'failed',
+		    last_checked_at = $2,
+		    updated_at = now()
+		WHERE id = $1
+		  AND domain_type = 'custom'
+		  AND status IN ('pending', 'failed')
+		RETURNING id, store_id, domain, is_primary, verified_at, status, domain_type, verification_token, last_checked_at, created_at, updated_at
+	`, domainID, lastCheckedAt).Scan(
+		&d.ID, &d.StoreID, &d.Domain, &d.IsPrimary, &d.VerifiedAt, &d.Status, &d.DomainType, &d.VerificationToken, &d.LastCheckedAt, &d.CreatedAt, &d.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StoreDomain{}, ErrConflict
+		}
+		return StoreDomain{}, translatePGError(err, "mark domain verification failed")
 	}
 	return d, nil
 }
@@ -177,7 +212,7 @@ func (r Repository) ListDomainsAdmin(ctx context.Context, filter AdminDomainFilt
 	return scanStoreDomains(rows)
 }
 
-// DisableDomainTx disables a domain. If the disabled domain was the primary domain of the store,
+// DisableDomainTx disables a domain for moderation. If the disabled domain was the primary domain of the store,
 // it attempts to promote an eligible active platform domain for the same store to primary.
 func (r Repository) DisableDomainTx(ctx context.Context, domainID string) (StoreDomain, error) {
 	if domainID == "" {
@@ -197,6 +232,11 @@ func (r Repository) DisableDomainTx(ctx context.Context, domainID string) (Store
 		)
 		if err != nil {
 			return translatePGError(err, "get domain to disable")
+		}
+
+		if target.Status == "disabled" {
+			disabled = target
+			return nil
 		}
 
 		wasPrimary := target.IsPrimary
@@ -236,7 +276,6 @@ func (r Repository) DisableDomainTx(ctx context.Context, domainID string) (Store
 					return translatePGError(err, "promote fallback platform primary")
 				}
 			}
-			// If no fallback platform domain exists, store remains with no primary domain.
 		}
 		return nil
 	})
@@ -244,7 +283,8 @@ func (r Repository) DisableDomainTx(ctx context.Context, domainID string) (Store
 	return disabled, err
 }
 
-// EnableDomainTx re-enables a domain according to moderation rules.
+// EnableDomainTx re-enables a DISABLED domain according to moderation rules.
+// Invoking EnableDomainTx on a domain that is not currently 'disabled' is rejected with ErrConflict.
 // For custom domains: restores to 'verified' (if verified_at is set) or 'pending' (if unverified), non-primary.
 // For platform domains: restores to 'active'. If the store has no primary domain, promotes it to primary.
 func (r Repository) EnableDomainTx(ctx context.Context, domainID string) (StoreDomain, error) {
@@ -265,6 +305,10 @@ func (r Repository) EnableDomainTx(ctx context.Context, domainID string) (StoreD
 		)
 		if err != nil {
 			return translatePGError(err, "get domain to enable")
+		}
+
+		if target.Status != "disabled" {
+			return fmt.Errorf("%w: domain is not disabled (current status: %s)", ErrConflict, target.Status)
 		}
 
 		newStatus := "active"

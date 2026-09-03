@@ -14,6 +14,26 @@ import (
 	"github.com/matjeroapps/core/packages/database"
 )
 
+type BlockingTXTResolver struct {
+	enterLookup chan struct{}
+	release     chan struct{}
+	records     []string
+	err         error
+}
+
+func (b *BlockingTXTResolver) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	if b.enterLookup != nil {
+		b.enterLookup <- struct{}{}
+	}
+	if b.release != nil {
+		<-b.release
+	}
+	if b.err != nil {
+		return nil, b.err
+	}
+	return b.records, nil
+}
+
 func openTestDB(t *testing.T) (*database.Pool, Repository, Service) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -400,4 +420,220 @@ func TestStoreDomainLifecycleIntegration(t *testing.T) {
 			t.Fatalf("concurrent activation resulted in %d primary domains, want 1", primaryCount)
 		}
 	})
+}
+
+func TestDisabledCustomDomainCannotBeVerifiedBySeller(t *testing.T) {
+	_, repo, svc := openTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	seller, err := repo.CreateSeller(ctx, "seller-dis-"+suffix, "Seller Dis", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSeller: %v", err)
+	}
+	sub := "sub-dis-" + suffix
+	if _, err := repo.CreateSellerMember(ctx, seller.ID, sub, "owner", "active"); err != nil {
+		t.Fatalf("CreateSellerMember: %v", err)
+	}
+	store, err := svc.CreateStoreForSubject(ctx, sub, seller.ID, "EG", "store-dis-"+suffix, "Store Dis", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateStoreForSubject: %v", err)
+	}
+
+	cd, err := svc.RequestCustomStoreDomain(ctx, sub, store.ID, "disabled-verify-"+suffix+".com")
+	if err != nil {
+		t.Fatalf("RequestCustomStoreDomain: %v", err)
+	}
+
+	recName := FormatTXTRecordName(cd.Domain)
+	fakeResolver := &FakeTXTResolver{
+		Records: map[string][]string{
+			recName: {FormatTXTRecordValue(*cd.VerificationToken)},
+		},
+	}
+	svc.TXTResolver = fakeResolver
+
+	// Admin disables domain
+	disabledDomain, err := svc.AdminDisableDomain(ctx, cd.ID)
+	if err != nil {
+		t.Fatalf("AdminDisableDomain: %v", err)
+	}
+	if disabledDomain.Status != "disabled" {
+		t.Fatalf("status = %s, want disabled", disabledDomain.Status)
+	}
+
+	// Seller calls /verify -> MUST return ErrConflict
+	_, err = svc.VerifyCustomStoreDomainForSubject(ctx, sub, store.ID, cd.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict when Seller calls verify on disabled domain, got %v", err)
+	}
+
+	// Domain remains disabled in DB
+	checkDomain, err := repo.GetStoreDomain(ctx, cd.ID)
+	if err != nil {
+		t.Fatalf("GetStoreDomain: %v", err)
+	}
+	if checkDomain.Status != "disabled" || checkDomain.IsPrimary {
+		t.Fatalf("domain should remain disabled non-primary: %+v", checkDomain)
+	}
+
+	// Seller calls /activate -> MUST return ErrConflict
+	_, err = svc.ActivateCustomStoreDomainForSubject(ctx, sub, store.ID, cd.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict when Seller calls activate on disabled domain, got %v", err)
+	}
+}
+
+func TestDNSVerificationRaceConditionWithAdminDisable(t *testing.T) {
+	_, repo, svc := openTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	seller, err := repo.CreateSeller(ctx, "seller-race-"+suffix, "Seller Race", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSeller: %v", err)
+	}
+	sub := "sub-race-" + suffix
+	if _, err := repo.CreateSellerMember(ctx, seller.ID, sub, "owner", "active"); err != nil {
+		t.Fatalf("CreateSellerMember: %v", err)
+	}
+	store, err := svc.CreateStoreForSubject(ctx, sub, seller.ID, "EG", "store-race-"+suffix, "Store Race", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateStoreForSubject: %v", err)
+	}
+
+	cd, err := svc.RequestCustomStoreDomain(ctx, sub, store.ID, "race-verify-"+suffix+".com")
+	if err != nil {
+		t.Fatalf("RequestCustomStoreDomain: %v", err)
+	}
+
+	blockingResolver := &BlockingTXTResolver{
+		enterLookup: make(chan struct{}, 1),
+		release:     make(chan struct{}, 1),
+		records:     []string{FormatTXTRecordValue(*cd.VerificationToken)},
+	}
+	svc.TXTResolver = blockingResolver
+
+	var verifyErr error
+	var wg sync.WaitGroup
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, verifyErr = svc.VerifyCustomStoreDomainForSubject(ctx, sub, store.ID, cd.ID)
+	}()
+
+	// Wait until Seller verification enters DNS lookup (has read domain as pending)
+	<-blockingResolver.enterLookup
+
+	// Admin disables domain while DNS lookup is in-flight
+	disabledDomain, err := svc.AdminDisableDomain(ctx, cd.ID)
+	if err != nil {
+		t.Fatalf("AdminDisableDomain during race: %v", err)
+	}
+	if disabledDomain.Status != "disabled" {
+		t.Fatalf("AdminDisableDomain status = %s", disabledDomain.Status)
+	}
+
+	// Release DNS lookup with matching TXT record
+	blockingResolver.release <- struct{}{}
+
+	wg.Wait()
+
+	// Seller verification MUST return ErrConflict (conditional SQL UPDATE failed)
+	if !errors.Is(verifyErr, ErrConflict) {
+		t.Fatalf("expected ErrConflict from in-flight Seller verify after Admin disable, got %v", verifyErr)
+	}
+
+	// Final DB state MUST remain disabled (NOT verified, active, or failed)
+	finalDomain, err := repo.GetStoreDomain(ctx, cd.ID)
+	if err != nil {
+		t.Fatalf("GetStoreDomain: %v", err)
+	}
+	if finalDomain.Status != "disabled" {
+		t.Fatalf("final domain status = %s, want disabled", finalDomain.Status)
+	}
+}
+
+func TestAdminEnablePreconditions(t *testing.T) {
+	_, repo, svc := openTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+
+	seller, err := repo.CreateSeller(ctx, "seller-enable-"+suffix, "Seller Enable", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSeller: %v", err)
+	}
+	sub := "sub-enable-" + suffix
+	if _, err := repo.CreateSellerMember(ctx, seller.ID, sub, "owner", "active"); err != nil {
+		t.Fatalf("CreateSellerMember: %v", err)
+	}
+	store, err := svc.CreateStoreForSubject(ctx, sub, seller.ID, "EG", "store-enable-"+suffix, "Store Enable", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateStoreForSubject: %v", err)
+	}
+
+	platformPrimary, err := repo.GetActivePrimaryStoreDomain(ctx, store.ID)
+	if err != nil {
+		t.Fatalf("GetActivePrimaryStoreDomain: %v", err)
+	}
+
+	// 1. Calling Enable on ACTIVE platform domain -> ErrConflict
+	_, err = svc.AdminEnableDomain(ctx, platformPrimary.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict calling Enable on active platform domain, got %v", err)
+	}
+
+	// 2. Calling Enable on PENDING custom domain -> ErrConflict
+	cdPending, err := svc.RequestCustomStoreDomain(ctx, sub, store.ID, "pending-"+suffix+".com")
+	if err != nil {
+		t.Fatalf("RequestCustomStoreDomain: %v", err)
+	}
+	_, err = svc.AdminEnableDomain(ctx, cdPending.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict calling Enable on pending custom domain, got %v", err)
+	}
+
+	// 3. Calling Enable on VERIFIED custom domain -> ErrConflict
+	recName := FormatTXTRecordName(cdPending.Domain)
+	fakeResolver := &FakeTXTResolver{
+		Records: map[string][]string{
+			recName: {FormatTXTRecordValue(*cdPending.VerificationToken)},
+		},
+	}
+	testSvc := svc
+	testSvc.TXTResolver = fakeResolver
+	cdVerified, err := testSvc.VerifyCustomStoreDomainForSubject(ctx, sub, store.ID, cdPending.ID)
+	if err != nil || cdVerified.Status != "verified" {
+		t.Fatalf("VerifyCustomStoreDomainForSubject: %v", err)
+	}
+	_, err = svc.AdminEnableDomain(ctx, cdVerified.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict calling Enable on verified custom domain, got %v", err)
+	}
+
+	// 4. Calling Enable on ACTIVE custom primary domain -> ErrConflict
+	cdActive, err := testSvc.ActivateCustomStoreDomainForSubject(ctx, sub, store.ID, cdVerified.ID)
+	if err != nil || cdActive.Status != "active" {
+		t.Fatalf("ActivateCustomStoreDomainForSubject: %v", err)
+	}
+	_, err = svc.AdminEnableDomain(ctx, cdActive.ID)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict calling Enable on active custom domain, got %v", err)
+	}
+
+	// 5. Admin disables custom primary domain -> disabled
+	disabledCustom, err := svc.AdminDisableDomain(ctx, cdActive.ID)
+	if err != nil || disabledCustom.Status != "disabled" {
+		t.Fatalf("AdminDisableDomain: %v", err)
+	}
+
+	// 6. Admin enables disabled custom domain (verified_at != nil) -> verified non-primary
+	reEnabledCustom, err := svc.AdminEnableDomain(ctx, disabledCustom.ID)
+	if err != nil {
+		t.Fatalf("AdminEnableDomain on disabled custom: %v", err)
+	}
+	if reEnabledCustom.Status != "verified" || reEnabledCustom.IsPrimary {
+		t.Fatalf("re-enabled custom domain should be verified non-primary, got %+v", reEnabledCustom)
+	}
 }

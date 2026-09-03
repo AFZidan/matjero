@@ -2,13 +2,13 @@
 
 ## Architectural Overview
 
-This document reports the implementation of **P4.8 Custom Domain Lifecycle (Stage A — Core Domain Lifecycle + DNS Verification + Moderation Capabilities)** in `/var/www/personal/matjero/core`.
+This document reports the implementation and security hardening of **P4.8 Custom Domain Lifecycle (Stage A — Core Domain Lifecycle + DNS Verification + Moderation Capabilities)** in `/var/www/personal/matjero/core`.
 
 Core owns the domain lifecycle state machine, PostgreSQL persistence, DNS TXT verification, domain validation, primary domain switching invariants, admin moderation capabilities, resource authorization, and internal runtime HTTP contracts. No changes were made to Seller or Admin repositories, adhering strictly to the permanent **Repository Independence** constraint.
 
 ---
 
-## 1. Domain Lifecycle State Machine
+## 1. Domain Lifecycle State Machine & Security Hardening
 
 The store domain state model is governed by explicit lifecycle transitions:
 
@@ -27,30 +27,51 @@ The store domain state model is governed by explicit lifecycle transitions:
  [Seller Activate]
         │
         ▼
-     (active)
- (is_primary=true)
+     (active) ────[Admin Disable]────► (disabled) [Moderation Lock]
+ (is_primary=true)                         │
+                                    [Admin Enable]
+                                           │
+                                           ▼
+                             (verified/pending non-primary)
 ```
 
-### Transition Invariants
+### Transition Invariants & Moderation Locking
 - **New Custom Domain**: Starts in `custom` type, `pending` status, `is_primary = false`, with a cryptographically secure 32-byte verification token.
 - **Ownership Verification**:
+  - Allowed ONLY when current status is `pending` or `failed`.
   - Exact TXT record match: `pending` or `failed` ➔ `verified` (`verified_at` and `last_checked_at` populated).
   - TXT mismatch / NXDOMAIN / missing record: `pending` or `failed` ➔ `failed` (`last_checked_at` updated).
+  - Re-verifying `active` or `verified` domains returns an idempotent success without re-querying DNS.
+  - **Disabled Domains**: `disabled` is an Admin moderation lock. Calling `/verify` on a `disabled` domain returns `ErrConflict` immediately. It does **not** perform DNS lookup and does **not** modify lifecycle state in the database.
 - **Activation**:
   - `verified` ➔ `active` (`is_primary = true`).
   - Atomically demotes the store's previous primary domain to `is_primary = false` while maintaining its `active` status.
+  - Activation of `disabled`, `pending`, or `failed` domains is strictly rejected with `ErrConflict`.
 - **Admin Disable**:
   - `pending` / `verified` / `failed` / `active` ➔ `disabled` (`is_primary = false`).
   - If the disabled domain was the store's `primary`, Core automatically promotes an eligible `active` `platform` domain for the same store to `is_primary = true`. If no active platform domain exists, the store is left without a primary domain.
+  - Idempotent if already `disabled`.
 - **Admin Re-enable**:
+  - Strictly requires target `status == "disabled"`. Invoking Enable on `active`, `verified`, or `pending` domains returns `ErrConflict` without modifying state.
   - `custom` domain: returns to `verified` (if previously verified, i.e. `verified_at != nil`) or `pending` (if unverified) with `is_primary = false`. It does **not** bypass Seller activation.
   - `platform` domain: returns to `active`. If the store currently has no primary domain, it becomes `is_primary = true`.
 
-### Disallowed Transitions
-- `pending` ➔ `active` (forbidden)
-- `failed` ➔ `active` (forbidden)
-- `disabled custom` ➔ `active` directly (forbidden; must re-enable to `verified` then Seller activates)
-- Seller mutating platform domain lifecycle (forbidden)
+### TOCTOU Prevention & Conditional Database Writes
+- DNS resolution remains outside database transactions.
+- Pre-checking status alone is insufficient because an Admin could disable a domain while a Seller's DNS lookup is in-flight.
+- Core enforces TOCTOU safety via conditional SQL transition queries (`MarkDomainVerifiedIfVerifiable` and `MarkDomainVerificationFailedIfVerifiable`):
+  ```sql
+  UPDATE store_domains
+  SET status = 'verified',
+      verified_at = COALESCE($2, verified_at),
+      last_checked_at = $3,
+      updated_at = now()
+  WHERE id = $1
+    AND domain_type = 'custom'
+    AND status IN ('pending', 'failed')
+  RETURNING ...
+  ```
+- If an Admin disables the domain while DNS lookup is in-flight, zero rows are updated, and the service layer returns `ErrConflict`. The domain remains securely `disabled`.
 
 ---
 
@@ -123,10 +144,6 @@ Core exposes internal capabilities under `/internal/v1`:
 - `POST /internal/v1/domains/{domainID}/disable` — Disable domain.
 - `POST /internal/v1/domains/{domainID}/enable` — Re-enable domain.
 
-### OpenAPI Artifacts
-- committed spec updated: `docs/api/internal/openapi.json`
-- Router-to-spec drift guard verified green via `TestSpecMatchesRouter`.
-
 ---
 
 ## 6. Database Schema & Migration Verification
@@ -141,6 +158,7 @@ Core exposes internal capabilities under `/internal/v1`:
 - **Verification Token Security**: Cryptographically random 32-byte entropy (`crypto/rand`). Never logged in raw form.
 - **Authorization Enforcement**: Core verifies Store ownership using the forwarded authenticated Seller subject (`RequireSellerAccess`). Cross-seller access yields safe 404 responses.
 - **Caller Separation**: Admin moderation routes strictly require `CallerAdmin`.
+- **Moderation Locks & Race Safety**: Seller verification cannot escape `disabled` status, and conditional DB updates prevent TOCTOU verification races against Admin moderation.
 
 ---
 
@@ -156,7 +174,10 @@ Core exposes internal capabilities under `/internal/v1`:
 1. `GOWORK=off go test -v ./pkg/commerce/...`:
    - `TestValidateCustomDomain`: Green
    - `TestDNSFormatting` & `TestFakeTXTResolver`: Green
-   - `TestStoreDomainLifecycleIntegration`: Green (All 7 subtests: Seller isolation, custom domain validation, DNS state machine, activation & primary switching, admin disable/enable fallback, platform enable fallback, concurrent activation safety).
+   - `TestStoreDomainLifecycleIntegration`: Green (Seller isolation, custom validation, DNS state machine, custom activation, admin disable fallback/enable, platform enable fallback, concurrent activation).
+   - `TestDisabledCustomDomainCannotBeVerifiedBySeller`: Green (Seller verify & activate rejected on disabled domain).
+   - `TestDNSVerificationRaceConditionWithAdminDisable`: Green (Deterministic race barrier confirms Admin disable wins over in-flight verification).
+   - `TestAdminEnablePreconditions`: Green (Asserts `ErrConflict` on non-disabled domains and proper custom/platform re-enable rules).
 2. `GOWORK=off go test -v ./internal/coreapi/...`:
    - `TestSpecMatchesRouter`: Green
 3. `GOWORK=off go run ./cmd/openapi-gen`: Green (`docs/api/internal/openapi.json` generated and verified).
