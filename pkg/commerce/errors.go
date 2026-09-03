@@ -8,4 +8,5 @@ var (
 	ErrMarketMismatch        = errors.New("market mismatch")
 	ErrInsufficientInventory = errors.New("insufficient inventory")
 	ErrInvalidInput          = errors.New("invalid input")
+	ErrUnavailable           = errors.New("service unavailable")
 )

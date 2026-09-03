@@ -137,6 +137,8 @@ func codeFor(err error) string {
 	case errors.Is(err, commerce.ErrConflict),
 		errors.Is(err, themes.ErrConflict):
 		return CodeConflict
+	case errors.Is(err, commerce.ErrUnavailable):
+		return CodeUnavailable
 	case errors.Is(err, themes.ErrSchemaMismatch):
 		return CodeSchemaMismatch
 	case errors.Is(err, themes.ErrUnsafeContent):

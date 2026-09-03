@@ -17,10 +17,16 @@ type Service struct {
 	// ReservedSubdomains are store-code labels that may not be claimed by sellers
 	// because they are reserved for platform use.
 	ReservedSubdomains []string
+
+	// TXTResolver abstracts DNS TXT lookups for custom domain ownership verification.
+	TXTResolver TXTResolver
 }
 
 func NewService(repo Repository) Service {
-	return Service{repo: repo}
+	return Service{
+		repo:        repo,
+		TXTResolver: DefaultTXTResolver{},
+	}
 }
 
 func (s Service) CreateSellerListing(ctx context.Context, storeID, productID string, supplierOfferID *string, marketCode, status string) (SellerListing, error) {
@@ -110,20 +116,6 @@ func (s Service) CreateStoreForSubject(ctx context.Context, subject, sellerID, m
 		return Store{}, err
 	}
 	return store, nil
-}
-
-// RequestCustomStoreDomain registers a seller-supplied custom domain for a store
-// in the PENDING lifecycle state. Authorization is enforced via the store's
-// owning seller.
-func (s Service) RequestCustomStoreDomain(ctx context.Context, subject, storeID, domain string) (StoreDomain, error) {
-	store, err := s.repo.GetStore(ctx, storeID)
-	if err != nil {
-		return StoreDomain{}, err
-	}
-	if _, err := s.RequireSellerAccess(ctx, subject, store.SellerID); err != nil {
-		return StoreDomain{}, err
-	}
-	return s.repo.CreateCustomStoreDomain(ctx, storeID, domain)
 }
 
 func (s Service) CreateFulfillmentLocationForSubject(ctx context.Context, subject, supplierID, supplierMarketID, marketCode, code, name, locationType, status string) (FulfillmentLocation, error) {

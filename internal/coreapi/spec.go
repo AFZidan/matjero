@@ -440,6 +440,40 @@ func internalRoutes() []openapi.RouteSpec {
 			Responses:   readResponses("Storefront host", StorefrontHostResponse{}),
 		},
 		{
+			Method: http.MethodGet, Path: "/internal/v1/stores/{storeID}/domains", OperationID: "internalListStoreDomains",
+			Summary: "List store domains", Tags: []string{"Stores"},
+			Parameters: []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
+			Responses:  readResponses("Domain collection", CollectionResponse[commerce.StoreDomainResponse]{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/domains", OperationID: "internalRequestCustomDomain",
+			Summary: "Request custom store domain", Tags: []string{"Stores"},
+			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
+			RequestBody: CustomDomainRequest{},
+			Responses:   createResponses("Created custom domain", commerce.StoreDomainResponse{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/domains/{domainID}/verify", OperationID: "internalVerifyCustomDomain",
+			Summary: "Verify custom store domain DNS TXT record", Tags: []string{"Stores"},
+			Parameters: []openapi.ParameterSpec{
+				pathParam("storeID", "Store identifier"),
+				pathParam("domainID", "Domain identifier"),
+			},
+			Responses: []openapi.ResponseSpec{
+				openapi.OKResponse("Domain verification status", commerce.StoreDomainResponse{}),
+				badRequest, unauthorized, forbidden, notFound, unavailable, serverError,
+			},
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/domains/{domainID}/activate", OperationID: "internalActivateCustomDomain",
+			Summary: "Activate verified custom store domain", Tags: []string{"Stores"},
+			Parameters: []openapi.ParameterSpec{
+				pathParam("storeID", "Store identifier"),
+				pathParam("domainID", "Domain identifier"),
+			},
+			Responses: writeResponses("Activated custom domain", commerce.StoreDomainResponse{}),
+		},
+		{
 			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/status", OperationID: "internalUpdateStoreStatus",
 			Summary: "Update a store status (admin)", Tags: []string{"Stores"},
 			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
@@ -577,6 +611,31 @@ func internalRoutes() []openapi.RouteSpec {
 				openapi.OKResponse("Overview counts", OverviewResponse{}),
 				unauthorized, forbidden, unavailable, serverError,
 			},
+		},
+		{
+			Method: http.MethodGet, Path: "/internal/v1/domains", OperationID: "internalListDomainsAdmin",
+			Summary: "List domains across stores (admin)", Tags: []string{"Platform Administration"},
+			Parameters: []openapi.ParameterSpec{
+				openapi.StringParam("store_id", "Store filter", false),
+				openapi.StringParam("seller_id", "Seller filter", false),
+				openapi.StringParam("status", "Status filter", false),
+				openapi.StringParam("domain_type", "Domain type filter", false),
+				openapi.StringParam("search", "Domain search filter", false),
+				openapi.LimitParam(), openapi.OffsetParam(),
+			},
+			Responses: readResponses("Domain collection", CollectionResponse[commerce.StoreDomainAdminResponse]{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/domains/{domainID}/disable", OperationID: "internalDisableDomain",
+			Summary: "Disable a store domain (admin)", Tags: []string{"Platform Administration"},
+			Parameters: []openapi.ParameterSpec{pathParam("domainID", "Domain identifier")},
+			Responses:  writeResponses("Disabled domain", commerce.StoreDomainAdminResponse{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/domains/{domainID}/enable", OperationID: "internalEnableDomain",
+			Summary: "Re-enable a store domain (admin)", Tags: []string{"Platform Administration"},
+			Parameters: []openapi.ParameterSpec{pathParam("domainID", "Domain identifier")},
+			Responses:  writeResponses("Enabled domain", commerce.StoreDomainAdminResponse{}),
 		},
 		{
 			Method: http.MethodGet, Path: "/internal/v1/products", OperationID: "internalListProducts",
