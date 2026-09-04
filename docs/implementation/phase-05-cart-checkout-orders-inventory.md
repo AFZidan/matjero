@@ -417,6 +417,57 @@ no eligible single Location with sufficient stock returns
 `insufficient_inventory`; and a retail price amount or currency change returns
 `price_changed`.
 
+### 9.4 Public SKU Cart Selection and Canonical Listing Identity
+
+The public Cart selection contract deliberately exposes only:
+
+```json
+{"sku_id": "<public SKU id>", "quantity": 1}
+```
+
+plus the established Cart bearer capability/context. The browser does not
+submit or need to know `seller_listing_id`, `supplier_offer_id`, `supplier_id`,
+`fulfillment_location_id`, `store_id`, or `seller_id`, and it never supplies an
+authoritative price. Tenant authority remains `trusted Storefront Host →
+StoreResolver → Store`; a browser-supplied Store or source identity cannot
+change that resolution.
+
+Core's Add-to-Cart operation resolves the trusted Store, then resolves
+`SKU → Variant → Product` and requires all three records to be active. It then
+selects the canonical public Seller Listing for that resolved Store and Product
+using the same Core-owned Storefront listing-selection primitive used by the
+public Product list, Product detail, and SKU availability read models. The
+current rule is the newest eligible Listing per Product:
+
+```sql
+ORDER BY seller_listing.created_at DESC, seller_listing.id DESC
+```
+
+(`DISTINCT ON (product)` queries retain the product grouping key before these
+tie-breakers.) P5.1 MUST keep this rule behind one shared query/helper/read-model
+primitive; Cart code must not duplicate or weaken it, and P5 must not add a
+`UNIQUE (store_id, product_id)` constraint merely to avoid defining the rule.
+
+After resolution, Core persists the internal `CartItem` identity
+`(seller_listing_id = resolved_listing.id, sku_id)` and snapshots the current
+authoritative Seller Listing Price into `expected_unit_price_minor` and
+`expected_currency_code`. It returns the authoritative safe Cart line/price
+DTO; sourcing and fulfillment identity remain private.
+
+The same resolved Listing governs the public retail price, Product availability,
+SKU availability, and CartItem persistence. Supplier-backed SKU availability
+counts only active inventory locations owned by that Listing's Supplier Offer
+Supplier. Seller-owned SKU availability counts only active inventory locations
+owned by that Listing's Store. A public projection must never combine Listing A's
+price with Listing B's stock.
+
+Listing and price authority is resolved at Add-to-Cart time. If a page was
+rendered from Listing A and a newer eligible Listing B becomes active before
+the mutation, Core resolves B and returns B's current authoritative price; it
+does not preserve browser-supplied Listing or price authority. Checkout later
+revalidates the persisted CartItem Listing/source and expected price at the
+final commercial acceptance point.
+
 ---
 
 ## 10. Checkout Session Aggregate
@@ -679,7 +730,7 @@ Authoritative uniqueness: `UNIQUE (store_id, order_number)` on `orders`.
 
 ### 14.1 Reservation Status States
 
-- `held`: Active reservation created at checkout. Holds stock (`reserved_qty += quantity`). `expires_at` is set to `$deadline` (matching `orders.confirmation_deadline_at`).
+- `held`: Active reservation created at checkout. Holds stock (`reserved_qty += quantity`). `expires_at` is set to `$confirmation_deadline_at` (matching `orders.confirmation_deadline_at`).
 - `consumed`: Order confirmed by Seller. Stock decremented (`reserved_qty -= quantity`, `on_hand_qty -= quantity`). Terminal.
 - `released`: Order cancelled before confirmation. Stock released (`reserved_qty -= quantity`). Terminal.
 - `expired`: Confirmation deadline elapsed. Stock released (`reserved_qty -= quantity`). Terminal.
@@ -879,6 +930,16 @@ CHECK (
   (supplier_offer_id IS NOT NULL AND source_supplier_id IS NOT NULL
    AND supplier_cost_minor IS NOT NULL
    AND supplier_cost_currency_code IS NOT NULL)
+)
+```
+
+Also enforce the Phase 5 currency equality at the Order Item boundary where
+practical:
+
+```sql
+CHECK (
+  supplier_cost_currency_code IS NULL
+  OR supplier_cost_currency_code = currency_code
 )
 ```
 
@@ -1446,7 +1507,7 @@ Operational metrics tracked:
 
 Must include deterministic unit and integration tests (zero sleep-based concurrency tests):
 
-The mandatory matrix below contains 127 deterministic tests.
+The mandatory matrix below contains 137 deterministic tests.
 
 ### 34.1 Concurrency & Stock Allocation Tests
 1. **Two available units under N checkouts:** N concurrent checkouts for a 2-unit stock → exactly 2 succeed.
@@ -1590,6 +1651,16 @@ The mandatory matrix below contains 127 deterministic tests.
 125. **Event cost privacy:** Phase 5 Order events never expose Supplier cost or source fields.
 126. **Pre-acceptance commercial race:** A price or status change committed before final commercial revalidation is observed and rejects or remaps checkout.
 127. **Post-acceptance commercial immutability:** A commercial change after `$order_created_at` does not mutate the persisted Order snapshot or totals.
+128. **Canonical newest Listing selection:** With multiple eligible Listings for one Store/Product, the shared Storefront/Cart rule selects the newest `created_at DESC, id DESC` Listing.
+129. **Shared displayed price and Cart Listing:** Product display retail price and Add-to-Cart resolve the same canonical Listing.
+130. **Supplier SKU availability continuity:** A Supplier-backed SKU counts only inventory owned by that canonical Listing's Supplier Offer Supplier.
+131. **Seller-owned SKU availability continuity:** A Seller-owned SKU counts only inventory owned by that canonical Listing's Store.
+132. **No cross-Listing projection:** Listing A's retail price cannot be combined with Listing B's stock to make one purchasable projection.
+133. **No browser Listing authority:** A submitted `seller_listing_id` is not part of the public contract and cannot select another Store's source.
+134. **No browser source authority:** Submitted Supplier/source identity cannot influence Core's resolved Listing or allocation.
+135. **Add-to-Cart Listing race:** If the rendered Listing A is replaced by newer canonical Listing B before Add-to-Cart, Core resolves B and returns B's authoritative current price.
+136. **Resolved Listing persistence:** CartItem stores the internally resolved canonical `seller_listing_id` alongside the public `sku_id`.
+137. **Checkout Cart Listing revalidation:** Final checkout revalidates the persisted CartItem Listing/source and expected price at final commercial acceptance.
 
 ---
 
@@ -1613,7 +1684,7 @@ The mandatory matrix below contains 127 deterministic tests.
 
 ### P5.1 — Customer + Cart Core Domain
 **Repository:** core · **Dependencies:** P5.0 merged
-Backend work: Migrations A, B, C; Cart aggregate; Parent Cart row locking on all item mutations; Store/Market composite FKs; NOT NULL expected price fields; source-aware Storefront inventory availability using Store/Supplier ownership, before Seller-owned stock is exposed.
+Backend work: Migrations A, B, C; Cart aggregate; Parent Cart row locking on all item mutations; Store/Market composite FKs; NOT NULL expected price fields; one shared Core-owned canonical Storefront Listing-selection primitive (`created_at DESC, id DESC`) used by Product list/detail, Product/SKU availability, and Cart; source-aware Product and SKU availability bound to that same Listing; Core Add-to-Cart resolving public `sku_id` to the canonical Listing and snapshotting its authoritative retail price; no browser-supplied Listing/source authority; before Seller-owned stock is exposed.
 
 ### P5.2 — Checkout Session + Server-Computed Fingerprint
 **Repository:** core · **Dependencies:** P5.1 merged
@@ -1637,7 +1708,7 @@ Backend work: Migration F; Bounded claim loop with `FOR UPDATE SKIP LOCKED`, par
 
 ### P5.7 — Storefront API + Storefront Web Cart & Checkout
 **Repository:** seller (`apps/storefront-api`, `web/storefront`) · **Dependencies:** P5.6 merged (requires reliable transaction & event foundation)
-Backend & Frontend work: Storefront cart & checkout routes; consume Core's source-aware availability; secure pre-issued capability management supporting multiple independent Guest Orders; Bearer cart cookie management; Next.js checkout UI; resolved-Host plus guest-capability Order read and PENDING-only cancellation routes. No UUID/order-number-only, browser-supplied Store, email-only, or single-global-cookie authorization; Supplier source/cost fields remain private.
+Backend & Frontend work: Storefront cart & checkout routes; public Add-to-Cart accepts only `sku_id`, `quantity`, and Cart capability/context and forwards that semantic selection through the authenticated Core client; consume Core's source-aware availability and return its safe Cart DTO; never submit or expose `seller_listing_id` or Supplier/Offer/Fulfillment/Store/Seller source IDs; secure pre-issued capability management supporting multiple independent Guest Orders; Bearer cart cookie management; Next.js checkout UI; resolved-Host plus guest-capability Order read and PENDING-only cancellation routes. No UUID/order-number-only, browser-supplied Store, email-only, or single-global-cookie authorization; Supplier source/cost fields remain private.
 
 ### P5.8 — Seller API + Seller Web Order Management
 **Repository:** seller (`apps/seller-api`, `web/seller`) · **Dependencies:** P5.6 merged (requires full Core order lifecycle, inventory, and outbox foundation)
