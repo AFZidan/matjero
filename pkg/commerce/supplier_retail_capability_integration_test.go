@@ -243,7 +243,6 @@ func TestSupplierRetailCapability_StoreOwnership(t *testing.T) {
 	}
 }
 
-
 func TestSupplierRetailCapability_SourceIntegrity(t *testing.T) {
 	_, repo, svc := openSupplierRetailTestDB(t)
 	ctx := context.Background()
