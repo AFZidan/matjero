@@ -72,6 +72,27 @@ func (r Repository) GetSupplierForSubject(ctx context.Context, subject string) (
 	return supplier, nil
 }
 
+func (r Repository) GetSupplierOwnerForSubject(ctx context.Context, supplierID, subject string) (Supplier, error) {
+	if supplierID == "" || subject == "" {
+		return Supplier{}, ErrInvalidInput
+	}
+
+	var supplier Supplier
+	err := r.pool.QueryRow(ctx, `
+		SELECT s.id, s.code, s.name, s.status, s.created_at, s.updated_at
+		FROM suppliers s
+		JOIN supplier_members sm ON sm.supplier_id = s.id
+		WHERE sm.supplier_id = $1
+		  AND sm.principal_subject = $2
+		  AND sm.status = 'active'
+		  AND sm.role = 'owner'
+	`, supplierID, subject).Scan(&supplier.ID, &supplier.Code, &supplier.Name, &supplier.Status, &supplier.CreatedAt, &supplier.UpdatedAt)
+	if err != nil {
+		return Supplier{}, translatePGError(err, "resolve supplier owner")
+	}
+	return supplier, nil
+}
+
 func (r Repository) GetSellerForSubject(ctx context.Context, subject string) (Seller, error) {
 	if subject == "" {
 		return Seller{}, ErrInvalidInput
@@ -1044,4 +1065,136 @@ func (r Repository) GetActivePrimaryStoreDomain(ctx context.Context, storeID str
 		return StoreDomain{}, translatePGError(err, "get active primary store domain")
 	}
 	return d, nil
+}
+
+func (r Repository) CreateSupplierSellerAffiliation(ctx context.Context, supplierID, sellerID string) (SupplierSellerAffiliation, error) {
+	if supplierID == "" || sellerID == "" {
+		return SupplierSellerAffiliation{}, ErrInvalidInput
+	}
+	var affiliation SupplierSellerAffiliation
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO supplier_seller_affiliations (supplier_id, seller_id)
+		VALUES ($1, $2)
+		RETURNING supplier_id, seller_id, created_at
+	`, supplierID, sellerID).Scan(&affiliation.SupplierID, &affiliation.SellerID, &affiliation.CreatedAt)
+	if err != nil {
+		return SupplierSellerAffiliation{}, translatePGError(err, "create supplier seller affiliation")
+	}
+	return affiliation, nil
+}
+
+func (r Repository) GetSupplierSellerAffiliationBySupplierID(ctx context.Context, supplierID string) (SupplierSellerAffiliation, error) {
+	if supplierID == "" {
+		return SupplierSellerAffiliation{}, ErrInvalidInput
+	}
+	var affiliation SupplierSellerAffiliation
+	err := r.pool.QueryRow(ctx, `
+		SELECT supplier_id, seller_id, created_at
+		FROM supplier_seller_affiliations
+		WHERE supplier_id = $1
+	`, supplierID).Scan(&affiliation.SupplierID, &affiliation.SellerID, &affiliation.CreatedAt)
+	if err != nil {
+		return SupplierSellerAffiliation{}, translatePGError(err, "get supplier seller affiliation by supplier id")
+	}
+	return affiliation, nil
+}
+
+func (r Repository) GetSupplierSellerAffiliationBySellerID(ctx context.Context, sellerID string) (SupplierSellerAffiliation, error) {
+	if sellerID == "" {
+		return SupplierSellerAffiliation{}, ErrInvalidInput
+	}
+	var affiliation SupplierSellerAffiliation
+	err := r.pool.QueryRow(ctx, `
+		SELECT supplier_id, seller_id, created_at
+		FROM supplier_seller_affiliations
+		WHERE seller_id = $1
+	`, sellerID).Scan(&affiliation.SupplierID, &affiliation.SellerID, &affiliation.CreatedAt)
+	if err != nil {
+		return SupplierSellerAffiliation{}, translatePGError(err, "get supplier seller affiliation by seller id")
+	}
+	return affiliation, nil
+}
+
+func (r Repository) ListStoresBySellerID(ctx context.Context, sellerID string, page Page) ([]Store, error) {
+	if sellerID == "" {
+		return nil, ErrInvalidInput
+	}
+	page = normalizePage(page)
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, seller_id, market_code, code, name, status, created_at, updated_at
+		FROM stores
+		WHERE seller_id = $1
+		ORDER BY created_at DESC, id DESC
+		LIMIT $2 OFFSET $3
+	`, sellerID, page.Limit, page.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("list stores by seller id: %w", err)
+	}
+	defer rows.Close()
+	return scanStores(rows)
+}
+
+func (r Repository) CreateSupplierRetailCapabilityForSubject(ctx context.Context, subject, supplierID string, draft RetailCapabilityDraft) (Seller, SupplierSellerAffiliation, error) {
+	if subject == "" || supplierID == "" || draft.Code == "" || draft.Name == "" {
+		return Seller{}, SupplierSellerAffiliation{}, ErrInvalidInput
+	}
+
+	var createdSeller Seller
+	var createdAffiliation SupplierSellerAffiliation
+
+	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		var dummy int
+		if err := tx.QueryRow(ctx, `
+			SELECT 1
+			FROM suppliers s
+			JOIN supplier_members sm ON sm.supplier_id = s.id
+			WHERE s.id = $1 AND sm.principal_subject = $2 AND sm.status = 'active' AND sm.role = 'owner'
+		`, supplierID, subject).Scan(&dummy); err != nil {
+			return translatePGError(err, "verify supplier owner for retail capability")
+		}
+
+		sellerID := uuid.NewString()
+		status := "active"
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO sellers (id, code, name, status)
+			VALUES ($1, $2, $3, $4)
+			RETURNING created_at, updated_at
+		`, sellerID, draft.Code, draft.Name, status).Scan(&createdSeller.CreatedAt, &createdSeller.UpdatedAt); err != nil {
+			return translatePGError(err, "create seller for retail capability")
+		}
+		createdSeller.ID = sellerID
+		createdSeller.Code = draft.Code
+		createdSeller.Name = draft.Name
+		createdSeller.Status = status
+
+		if err := upsertJSONSettings(ctx, tx, `
+			INSERT INTO seller_settings (seller_id, settings)
+			VALUES ($1, $2)
+			ON CONFLICT (seller_id) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
+		`, sellerID, draft.Settings); err != nil {
+			return err
+		}
+
+		memberID := uuid.NewString()
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO seller_members (id, seller_id, principal_subject, role, status)
+			VALUES ($1, $2, $3, 'owner', 'active')
+		`, memberID, sellerID, subject); err != nil {
+			return translatePGError(err, "create seller member for retail capability")
+		}
+
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO supplier_seller_affiliations (supplier_id, seller_id)
+			VALUES ($1, $2)
+			RETURNING created_at
+		`, supplierID, sellerID).Scan(&createdAffiliation.CreatedAt); err != nil {
+			return translatePGError(err, "create supplier seller affiliation")
+		}
+		createdAffiliation.SupplierID = supplierID
+		createdAffiliation.SellerID = sellerID
+
+		return nil
+	})
+
+	return createdSeller, createdAffiliation, err
 }

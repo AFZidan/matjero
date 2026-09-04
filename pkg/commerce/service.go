@@ -45,6 +45,13 @@ func (s Service) CreateSellerListing(ctx context.Context, storeID, productID str
 		if offer.MarketCode != marketCode {
 			return SellerListing{}, fmt.Errorf("%w: supplier offer market %s does not match %s", ErrMarketMismatch, offer.MarketCode, marketCode)
 		}
+		supplierProduct, err := s.repo.GetSupplierProductByID(ctx, offer.SupplierProductID)
+		if err != nil {
+			return SellerListing{}, err
+		}
+		if supplierProduct.ProductID != productID {
+			return SellerListing{}, fmt.Errorf("%w: supplier offer product %s does not match listing product %s", ErrInvalidInput, supplierProduct.ProductID, productID)
+		}
 	}
 	return s.repo.CreateSellerListing(ctx, storeID, productID, supplierOfferID, marketCode, status)
 }
@@ -84,20 +91,70 @@ func (s Service) RequireSellerAccess(ctx context.Context, subject, sellerID stri
 	return seller, nil
 }
 
+func (s Service) RequireSupplierRetailAccess(ctx context.Context, subject, supplierID string) (Seller, error) {
+	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
+		return Seller{}, err
+	}
+	affiliation, err := s.repo.GetSupplierSellerAffiliationBySupplierID(ctx, supplierID)
+	if err != nil {
+		return Seller{}, err
+	}
+	seller, err := s.repo.GetSellerByID(ctx, affiliation.SellerID)
+	if err != nil {
+		return Seller{}, err
+	}
+	return seller, nil
+}
+
+func (s Service) RequireSupplierRetailStoreAccess(ctx context.Context, subject, supplierID, storeID string) (Store, Seller, error) {
+	seller, err := s.RequireSupplierRetailAccess(ctx, subject, supplierID)
+	if err != nil {
+		return Store{}, Seller{}, err
+	}
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return Store{}, Seller{}, err
+	}
+	if store.SellerID != seller.ID {
+		return Store{}, Seller{}, ErrNotFound
+	}
+	return store, seller, nil
+}
+
+func (s Service) RequireSupplierOwnerAccess(ctx context.Context, subject, supplierID string) (Supplier, error) {
+	if supplierID == "" || subject == "" {
+		return Supplier{}, ErrInvalidInput
+	}
+	return s.repo.GetSupplierOwnerForSubject(ctx, supplierID, subject)
+}
+
+func (s Service) CreateSupplierRetailCapabilityForSubject(ctx context.Context, subject, supplierID string, draft RetailCapabilityDraft) (Seller, SupplierSellerAffiliation, error) {
+	if _, err := s.RequireSupplierOwnerAccess(ctx, subject, supplierID); err != nil {
+		return Seller{}, SupplierSellerAffiliation{}, err
+	}
+	return s.repo.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplierID, draft)
+}
+
 func (s Service) CreateStoreForSubject(ctx context.Context, subject, sellerID, marketCode, code, name, status string, settings map[string]any) (Store, error) {
 	if _, err := s.RequireSellerAccess(ctx, subject, sellerID); err != nil {
 		return Store{}, err
 	}
+	return s.createStoreForSeller(ctx, sellerID, marketCode, code, name, status, settings)
+}
 
-	// No platform domain configured: create the store without an auto-allocated
-	// subdomain.
+func (s Service) CreateSupplierStoreForSubject(ctx context.Context, subject, supplierID, marketCode, code, name, status string, settings map[string]any) (Store, error) {
+	seller, err := s.RequireSupplierRetailAccess(ctx, subject, supplierID)
+	if err != nil {
+		return Store{}, err
+	}
+	return s.createStoreForSeller(ctx, seller.ID, marketCode, code, name, status, settings)
+}
+
+func (s Service) createStoreForSeller(ctx context.Context, sellerID, marketCode, code, name, status string, settings map[string]any) (Store, error) {
 	if s.PlatformDomain == "" {
 		return s.repo.CreateStore(ctx, sellerID, marketCode, code, name, status, settings)
 	}
 
-	// Validate the reserved subdomain before any database write. The platform
-	// subdomain is derived from the store code, so a reserved code must be
-	// rejected up front.
 	normalizedCode := strings.ToLower(strings.TrimSpace(code))
 	for _, reserved := range s.ReservedSubdomains {
 		if normalizedCode == strings.ToLower(strings.TrimSpace(reserved)) {

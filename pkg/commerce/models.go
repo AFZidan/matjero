@@ -64,6 +64,18 @@ type SellerMember struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
+type SupplierSellerAffiliation struct {
+	SupplierID string    `json:"supplier_id"`
+	SellerID   string    `json:"seller_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type RetailCapabilityDraft struct {
+	Code     string         `json:"code"`
+	Name     string         `json:"name"`
+	Settings map[string]any `json:"settings"`
+}
+
 type Store struct {
 	ID         string    `json:"id"`
 	SellerID   string    `json:"seller_id"`

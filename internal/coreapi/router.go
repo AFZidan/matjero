@@ -136,6 +136,15 @@ func NewRouter(deps Dependencies) chi.Router {
 			r.Get("/suppliers/{supplierID}/inventory/{snapshotID}/movements", server.handleListInventoryMovements)
 		})
 
+		// Supplier Retail capabilities (Supplier-service only self-service operations).
+		r.Group(func(r chi.Router) {
+			r.Use(requireCallers(serviceauth.CallerSupplier))
+			r.Get("/suppliers/{supplierID}/retail-capability", server.handleGetSupplierRetailCapability)
+			r.Post("/suppliers/{supplierID}/retail-capability", server.handleCreateSupplierRetailCapability)
+			r.Get("/suppliers/{supplierID}/stores", server.handleListSupplierStores)
+			r.Post("/suppliers/{supplierID}/stores", server.handleCreateSupplierStore)
+		})
+
 		// Store capabilities.
 		r.Group(func(r chi.Router) {
 			r.Use(requireCallers(serviceauth.CallerSeller, serviceauth.CallerAdmin))

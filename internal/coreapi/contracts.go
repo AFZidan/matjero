@@ -171,6 +171,19 @@ type InventoryAdjustmentResponse struct {
 	Movement commerce.InventoryMovement `json:"movement"`
 }
 
+// SupplierRetailCapabilityRequest creates a seller profile for a supplier.
+type SupplierRetailCapabilityRequest struct {
+	Code     string         `json:"code"`
+	Name     string         `json:"name"`
+	Settings map[string]any `json:"settings"`
+}
+
+// SupplierRetailCapabilityResponse details the supplier's explicit retail link and seller profile.
+type SupplierRetailCapabilityResponse struct {
+	Affiliation commerce.SupplierSellerAffiliation `json:"affiliation"`
+	Seller      commerce.Seller                    `json:"seller"`
+}
+
 // --- Seller listings ---
 
 // SellerListingImportRequest imports a supplier offer into a seller's store.
