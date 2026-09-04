@@ -37,30 +37,30 @@ The canonical git commit SHAs recorded at Phase 4 completion baseline are:
 | **P4.3** | `core` | #12 | `c6167b96201af306db7074a9c045c9f025b7d268` | `c63d084863d517599853b48bb3c262685a7b6ec9` | MERGED | `pkg/storefront/catalog_repository.go` | PASS |
 | **P4.3** | `seller` | #1 | `cc2149fc3a1dc64fb4a9720635ee4950217da137` | `b2441ee169f4ac614d3924c65ac74d314843d072` | MERGED | `internal/storefrontapi/router.go` | PASS |
 | **Repo Indep.** | `core` | #13 | `cfba60226045c051174dc91094aa3a82700b382a` | `bfc9721cf628bed1985c917a66c053970e9fce1e` | MERGED | `docs/implementation/repository-independence-report.md` | PASS |
-| **Repo Indep.** | `core` | #14 | `1336f05` | `1336f05` | MERGED | N/A | PASS |
-| **Repo Indep.** | `core` | #15 | `c873f9e` | `c873f9e` | MERGED | N/A | PASS |
+| **Repo Indep.** | `core` | #14 | `01432bf0872eb79bc184fb057df93951a1583d23` | `1336f05751c2c47001d833ca201b748bfa37f793` | MERGED | N/A | PASS |
+| **Repo Indep.** | `core` | #15 | `9f76cade5e13b3ed56587da12b537762c45dde2c` | `c873f9e5605523d33f98ee300f7f8b8b7568a647` | MERGED | N/A | PASS |
 | **Repo Indep.** | `seller` | #2 | `a93e4dad2397c5614747a59d47603f48d9865dd9` | `ad582046b3c2a93c8231cd2151c68c8c2b16d418` | MERGED | N/A | PASS |
-| **Repo Indep.** | `seller` | #3 | `6600052` | `6600052` | MERGED | N/A | PASS |
+| **Repo Indep.** | `seller` | #3 | `6c36eb203457cbe4f86489c41c555adee1fc1123` | `6600052f8bcef034cdd39383a5d5b6e02f9d0cb3` | MERGED | N/A | PASS |
 | **Repo Indep.** | `admin` | #1 | `98cabc3edb31bef56097d08839d05ff1a77255fb` | `38c678171b77bdd65bf856e2de55229c945c5956` | MERGED | N/A | PASS |
-| **Repo Indep.** | `admin` | #2 | `c42c79b` | `c42c79b` | MERGED | N/A | PASS |
+| **Repo Indep.** | `admin` | #2 | `df7fba1879fd683d6465ed67aac9decd3f99bec9` | `c42c79bcf5698235784070ceb38e078caf38c982` | MERGED | N/A | PASS |
 | **Repo Indep.** | `supplier` | #1 | `65b1fc4c22de9d1413d4074a1729016821f797f9` | `ba89cd608fbd91155de976aa108f040d6a8af38c` | MERGED | N/A | PASS |
-| **Repo Indep.** | `supplier` | #2 | `9f23e71` | `9f23e71` | MERGED | N/A | PASS |
+| **Repo Indep.** | `supplier` | #2 | `e87d6d4586ed03f1a008fe6e39ab9bc3ba6c4b95` | `0d601c81b9ecd5b486f45a690f4e9a716efd12d5` | MERGED | N/A | PASS |
 | **P4.4** | `core` | #16 | `6834206be529621c2e6d615d4f6506342bdad620` | `5f1e0b75de1b645a9b3b33e7c394a453a1570323` | MERGED | `pkg/commerce/storefront_revision.go` | PASS |
 | **P4.4** | `seller` | #4 | `638ec8d2e9f20e3dbb7227746ee03f3a6fa42eb6` | `a9d28d1f68252a0feba42205a73520897fb569b8` | MERGED | `internal/storefrontcache/cache.go` | PASS |
 | **P4.5** | `seller` | #5 | `5b0cc0c47d821cf6dbd2a8b3b6c469d37c784b23` | `c4675d78420a7399aabc4a2dd4b17602d78adc72` | MERGED | `web/storefront/src/app/[locale]/(store)/` | PASS |
 | **P4.6** | `seller` | #6 | `637dd1d386e08507c7093b1092045f748eff436e` | `c7798b6ca0782a7d5eac367037a695bf8569483c` | MERGED | `web/storefront/src/server/seo.ts` | PASS |
-| **P4.7** | `core` | #18 | `0380854119f194c52f504768c609edf6961ee39c` | `a94d73d8bb2387e695a3bf85b950df77dc416d54` | MERGED | `docs/implementation/storefront-theme-preview-runtime-report.md` | PASS |
-| **P4.7** | `core` | #19 | `a94d73d` | `a94d73d` | MERGED | N/A | PASS |
-| **P4.7** | `seller` | #7 | `664e7c1` | `664e7c1` | MERGED | N/A | PASS |
-| **P4.7** | `seller` | #8 | `bf70c50` | `bf70c50` | MERGED | N/A | PASS |
-| **P4.7** | `seller` | #9 | `4e2a26f22a128218358cac574b5e955abeb1fefc` | `acc613d` | MERGED | `web/seller/src/components/ThemeEditorPanel.tsx` | PASS |
-| **P4.7** | `seller` | #10 | `2c1a09b` | `2c1a09b` | MERGED | N/A | PASS |
+| **P4.7** | `core` | #18 | `0380854119f194c52f504768c609edf6961ee39c` | `e3e7feb2d04e45e964c1e5cbc82aabf4b12754db` | MERGED | `docs/implementation/storefront-theme-preview-runtime-report.md` | PASS |
+| **P4.7** | `core` | #19 | `f0638c28255f827213d25f7273ceb1b44a18bbac` | `a94d73d8bb2387e695a3bf85b950df77dc416d54` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #7 | `1490e4591d2e39f8142976be4b991d2675d7d4ed` | `664e7c124c844c0a50bb5ab6578dd9612558a1d6` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #8 | `2cff72ef337a3f83c74b7cc3148424cca209d676` | `bf70c50af50ca8ed1f9a09ab4f5eb7bf2bee7892` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #9 | `4e2a26f22a128218358cac574b5e955abeb1fefc` | `acc613d1c3fde592d2c4915de5127861cfca5456` | MERGED | `web/seller/src/components/ThemeEditorPanel.tsx` | PASS |
+| **P4.7** | `seller` | #10 | `8ba140e1d48b12ad4e8a1a246142d8d56a2e3940` | `2c1a09b61d7ac809c229c81c861392f7d6d574ac` | MERGED | N/A | PASS |
 | **P4.8A**| `core` | #20 | `781e8e928035708cbbcd73372b4f18e1751c7ed4` | `96cf98e5a1f1de3f388a86e316b5b59414d49d11` | MERGED | `pkg/commerce/domain_lifecycle.go` | PASS |
 | **P4.8B**| `seller` | #11 | `29b96a4716a30e9fe6253bf7d9c8fcaec45de531` | `1354a9ab2d4e001b5ac5ac13aaac958aa69505c7` | MERGED | `internal/sellerapi/domains.go` | PASS |
-| **P4.8C**| `admin` | #3 | `5b9d16c` | `5b9d16c` | MERGED | N/A | PASS |
-| **P4.8C**| `admin` | #4 | `26ea097c3bd87ad27bec5b76e8788a12a5b28bf6` | `c611db0` | MERGED | `docs/implementation/admin-domain-moderation-report.md` | PASS |
-| **P4.8C**| `admin` | #5 | `5c6d0b5` | `5c6d0b5` | MERGED | N/A | PASS |
-| **P4.8C**| `admin` | #6 | `5c3a3ba` | `5c3a3ba` | MERGED | N/A | PASS |
+| **P4.8C**| `admin` | #3 | `e1b5c65b828a78cf910b04481ad509493d0161c0` | `5b9d16c26a52c4faa0cd7193d975841cb1ecde7f` | MERGED | N/A | PASS |
+| **P4.8C**| `admin` | #4 | `6d22220c5a75610051855832c6b1f2308d334397` | `c611db032a35096663e0013f5211b943d582428a` | MERGED | `docs/implementation/admin-domain-moderation-report.md` | PASS |
+| **P4.8C**| `admin` | #5 | `8f2dca2e102fb568b1276ff7767569fab11aa0cc` | `5c6d0b53f4118774fa96ce01a1a45605dbdfb390` | MERGED | N/A | PASS |
+| **P4.8C**| `admin` | #6 | `26ea097c3bd87ad27bec5b76e8788a12a5b28bf6` | `5c3a3bacaa2131670294af1f254d417ed09310ae` | MERGED | N/A | PASS |
 | **Post-P4.10 Fix**| `admin` | #7 | `c2a3b034564a3eae45fb508080134ad6b78b21af` | `50b54117b201d10203d5b8b2bb943b3a6fb66d3c` | MERGED | `.github/workflows/ci.yml` | PASS |
 | **Prereq**| `core` | #21 | `d7e36be5cc1e64e50a913bef6521d135c645cca9` | `a466e5166e844a64215362c288f3c353f702d7a2` | MERGED | `docs/implementation/supplier-retail-capability-report.md` | PASS |
 | **P4.9** | `seller` | #12 | `675f1c26958d758ab45b757dbc720008c6d0b9c2` | `d75f84c66cfca9ab4c79c8a3495c5080be28a7af` | MERGED | `docs/implementation/storefront-performance-security-regression-report.md` | PASS |
@@ -400,7 +400,8 @@ Architectural highlights for Phase 5:
 - **Checkout Critical Path**: Validate Store, Validate Market, Validate Listings, Validate Prices, Reserve Inventory, Create Order, Create Order Items, Create Outbox Events, Commit, Return Order.
 - **Transactional Outbox**: PostgreSQL Transactional Outbox foundation.
 - **Outbox Publishing**: Polling Outbox Publisher pushing to RabbitMQ Event Transport.
-- **Consumer Inbox**: Idempotency mechanism with `aggregate_id` + `aggregate_version` causal ordering semantics.
+- **Consumer Inbox / Idempotency**: processed event identity is `consumer_name` + `event_id`. Duplicate event delivery must be ignored safely.
+- **Event Ordering**: causal ordering uses `aggregate_id` + `aggregate_version`. Timestamps are not authoritative ordering.
 
 All Phase 6 (Shipping method/provider) and Phase 7 (Payment gateway, settlement) capabilities remain strictly out of scope for Phase 5.
 
