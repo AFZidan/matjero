@@ -48,8 +48,10 @@ func setupSupplierRetailAPI(t *testing.T) (context.Context, commerce.Repository,
 		Tokens: map[serviceauth.Caller]string{
 			serviceauth.CallerSupplier: testSupplierToken,
 			serviceauth.CallerSeller:   testSellerToken,
+			serviceauth.CallerAdmin:    testAdminToken,
 		},
 	}
+
 	handler := serviceauth.Middleware(cfg)(router)
 
 	return context.Background(), repo, svc, handler
@@ -99,7 +101,38 @@ func TestSupplierRetailAPI_SecurityAndCapabilities(t *testing.T) {
 		t.Fatalf("expected 403 Forbidden for CallerSeller on supplier endpoint, got %d", rec2.Code)
 	}
 
-	// 3. Supplier A attempting to act on Supplier B -> 404 Not Found (safe isolation)
+	// 2b. Admin caller attempting Supplier Retail endpoint -> 403 Forbidden (Supplier-service only self-service capability)
+	req2b := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/internal/v1/suppliers/%s/retail-capability", supA.ID), nil)
+	req2b.Header.Set("Authorization", "Bearer "+testAdminToken)
+	req2b.Header.Set("X-Matjero-Service", "admin")
+	req2b.Header.Set("X-Matjero-Subject", subjectA)
+	rec2b := httptest.NewRecorder()
+	handler.ServeHTTP(rec2b, req2b)
+	if rec2b.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 Forbidden for CallerAdmin on supplier retail endpoint, got %d", rec2b.Code)
+	}
+
+	// 3. Supplier Manager (non-owner) attempting to provision Retail Capability -> Authorization Failure (404/Domain Error)
+	subjectMgr := "sub-api-supplier-mgr-" + suffix
+	if _, err := repo.CreateSupplierMember(ctx, supA.ID, subjectMgr, "manager", "active"); err != nil {
+		t.Fatalf("CreateSupplierMember Manager: %v", err)
+	}
+	mgrBody, _ := json.Marshal(SupplierRetailCapabilityRequest{
+		Code: "sel-mgr-attempt-" + suffix,
+		Name: "Manager Attempt Profile",
+	})
+	reqMgr := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/internal/v1/suppliers/%s/retail-capability", supA.ID), bytes.NewReader(mgrBody))
+	reqMgr.Header.Set("Authorization", "Bearer "+testSupplierToken)
+	reqMgr.Header.Set("X-Matjero-Service", "supplier")
+	reqMgr.Header.Set("X-Matjero-Subject", subjectMgr)
+	reqMgr.Header.Set("Content-Type", "application/json")
+	recMgr := httptest.NewRecorder()
+	handler.ServeHTTP(recMgr, reqMgr)
+	if recMgr.Code == http.StatusCreated || recMgr.Code == http.StatusOK {
+		t.Fatalf("expected authorization failure for Manager subject provisioning retail capability, got %d", recMgr.Code)
+	}
+
+	// 3b. Supplier A attempting to act on Supplier B -> 404 Not Found (safe isolation)
 	req3 := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/internal/v1/suppliers/%s/retail-capability", supB.ID), nil)
 	req3.Header.Set("Authorization", "Bearer "+testSupplierToken)
 	req3.Header.Set("X-Matjero-Service", "supplier")

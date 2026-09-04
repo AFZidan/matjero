@@ -121,8 +121,15 @@ func (s Service) RequireSupplierRetailStoreAccess(ctx context.Context, subject, 
 	return store, seller, nil
 }
 
+func (s Service) RequireSupplierOwnerAccess(ctx context.Context, subject, supplierID string) (Supplier, error) {
+	if supplierID == "" || subject == "" {
+		return Supplier{}, ErrInvalidInput
+	}
+	return s.repo.GetSupplierOwnerForSubject(ctx, supplierID, subject)
+}
+
 func (s Service) CreateSupplierRetailCapabilityForSubject(ctx context.Context, subject, supplierID string, draft RetailCapabilityDraft) (Seller, SupplierSellerAffiliation, error) {
-	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
+	if _, err := s.RequireSupplierOwnerAccess(ctx, subject, supplierID); err != nil {
 		return Seller{}, SupplierSellerAffiliation{}, err
 	}
 	return s.repo.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplierID, draft)

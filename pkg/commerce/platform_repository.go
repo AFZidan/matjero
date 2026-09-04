@@ -72,6 +72,27 @@ func (r Repository) GetSupplierForSubject(ctx context.Context, subject string) (
 	return supplier, nil
 }
 
+func (r Repository) GetSupplierOwnerForSubject(ctx context.Context, supplierID, subject string) (Supplier, error) {
+	if supplierID == "" || subject == "" {
+		return Supplier{}, ErrInvalidInput
+	}
+
+	var supplier Supplier
+	err := r.pool.QueryRow(ctx, `
+		SELECT s.id, s.code, s.name, s.status, s.created_at, s.updated_at
+		FROM suppliers s
+		JOIN supplier_members sm ON sm.supplier_id = s.id
+		WHERE sm.supplier_id = $1
+		  AND sm.principal_subject = $2
+		  AND sm.status = 'active'
+		  AND sm.role = 'owner'
+	`, supplierID, subject).Scan(&supplier.ID, &supplier.Code, &supplier.Name, &supplier.Status, &supplier.CreatedAt, &supplier.UpdatedAt)
+	if err != nil {
+		return Supplier{}, translatePGError(err, "resolve supplier owner")
+	}
+	return supplier, nil
+}
+
 func (r Repository) GetSellerForSubject(ctx context.Context, subject string) (Seller, error) {
 	if subject == "" {
 		return Seller{}, ErrInvalidInput
@@ -1127,9 +1148,9 @@ func (r Repository) CreateSupplierRetailCapabilityForSubject(ctx context.Context
 			SELECT 1
 			FROM suppliers s
 			JOIN supplier_members sm ON sm.supplier_id = s.id
-			WHERE s.id = $1 AND sm.principal_subject = $2 AND sm.status = 'active'
+			WHERE s.id = $1 AND sm.principal_subject = $2 AND sm.status = 'active' AND sm.role = 'owner'
 		`, supplierID, subject).Scan(&dummy); err != nil {
-			return translatePGError(err, "verify supplier member for retail capability")
+			return translatePGError(err, "verify supplier owner for retail capability")
 		}
 
 		sellerID := uuid.NewString()

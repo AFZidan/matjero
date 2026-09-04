@@ -59,15 +59,15 @@ The affiliation table enforces a strict **1:1 relationship**:
 - One Supplier profile ↔ at most one retail Seller profile.
 - One Seller profile ↔ at most one Supplier profile.
 
-### 4. Core as the Single Authority
+### 4. Core as the Single Authority & Supplier Service Boundary
 
 The Supplier service NEVER calls the Seller service to execute Core business capabilities. Core is the authoritative domain and data boundary.
 
-Core provides dedicated Supplier-scoped internal APIs (`/internal/v1/suppliers/{supplierID}/...`) to manage retail capabilities and stores cleanly without cross-service RPC.
+Core provides dedicated Supplier-scoped internal APIs (`/internal/v1/suppliers/{supplierID}/...`) restricted exclusively to `serviceauth.CallerSupplier` for self-service retail capabilities and stores. Admin retail linking and moderation are deferred to explicit future Admin contracts.
 
-### 5. Atomic Retail Capability Provisioning
+### 5. Atomic Retail Capability Provisioning & Owner Governance
 
-A Supplier explicitly enables its retail capability via Core.
+Retail capability provisioning is an **OWNER-level Supplier governance action**. Only an active Supplier member with `role = owner` and `status = active` may provision the retail capability. Active non-owner members (e.g., manager, viewer) are strictly forbidden from creating the linked Seller capability.
 
 Provisioning MUST execute as a single atomic PostgreSQL transaction creating:
 - `sellers` (Seller profile)
@@ -75,11 +75,11 @@ Provisioning MUST execute as a single atomic PostgreSQL transaction creating:
 - `seller_members` (Initial owner membership)
 - `supplier_seller_affiliations` (Explicit 1:1 link)
 
-If any operation fails, the transaction rolls back completely, leaving no orphan records.
+If any operation fails (e.g., affiliation uniqueness conflict), the transaction rolls back completely, leaving no orphan Seller or SellerMember records.
 
 ### 6. Initial Seller Membership & Isolation
 
-The authenticated Supplier subject that explicitly enables the retail capability becomes an active Seller member (`role = owner`, `status = active`) for the new Seller profile.
+The authenticated Supplier OWNER subject that explicitly enables the retail capability becomes an active Seller member (`role = owner`, `status = active`) for the new Seller profile.
 
 Supplier membership is NOT implicitly converted into Seller membership. Existing `supplier_members` rows are NOT copied into `seller_members`.
 

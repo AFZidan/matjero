@@ -382,3 +382,205 @@ func TestSupplierRetailCapability_SourceDerivation_OwnAndNetwork(t *testing.T) {
 		t.Fatalf("expected listingNet source to be NETWORK (supplier %s != affiliated %s)", fetchedOfferNet.SupplierID, affA.SupplierID)
 	}
 }
+
+func TestSupplierRetailCapability_ManagerRejection(t *testing.T) {
+	_, repo, svc := openSupplierRetailTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	subjectOwner := "sub-owner-mgr-" + suffix
+	subjectManager := "sub-manager-mgr-" + suffix
+
+	supplier, err := repo.CreateSupplier(ctx, "sup-mgr-"+suffix, "Manager Test Supplier", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSupplier: %v", err)
+	}
+	if _, err := repo.CreateSupplierMember(ctx, supplier.ID, subjectOwner, "owner", "active"); err != nil {
+		t.Fatalf("CreateSupplierMember Owner: %v", err)
+	}
+	if _, err := repo.CreateSupplierMember(ctx, supplier.ID, subjectManager, "manager", "active"); err != nil {
+		t.Fatalf("CreateSupplierMember Manager: %v", err)
+	}
+
+	draftMgr := RetailCapabilityDraft{
+		Code: "ret-mgr-" + suffix,
+		Name: "Manager Retail Attempt",
+	}
+
+	// Manager B calls CreateSupplierRetailCapabilityForSubject -> MUST FAIL
+	_, _, err = svc.CreateSupplierRetailCapabilityForSubject(ctx, subjectManager, supplier.ID, draftMgr)
+	if err == nil {
+		t.Fatalf("expected error when manager attempts to provision retail capability, got nil")
+	}
+
+	// Verify NO seller, NO settings, NO seller_members, NO affiliation
+	_, err = repo.GetSupplierSellerAffiliationBySupplierID(ctx, supplier.ID)
+	if err == nil || !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for affiliation after manager rejection, got %v", err)
+	}
+
+	// Now Owner A calls CreateSupplierRetailCapabilityForSubject -> MUST SUCCEED
+	draftOwner := RetailCapabilityDraft{
+		Code: "ret-own-" + suffix,
+		Name: "Owner Retail Seller",
+	}
+	seller, aff, err := svc.CreateSupplierRetailCapabilityForSubject(ctx, subjectOwner, supplier.ID, draftOwner)
+	if err != nil {
+		t.Fatalf("expected owner to successfully provision retail capability, got %v", err)
+	}
+	if seller.Code != draftOwner.Code || aff.SupplierID != supplier.ID {
+		t.Fatalf("unexpected seller/affiliation state: seller=%+v aff=%+v", seller, aff)
+	}
+}
+
+func TestSupplierRetailCapability_AffiliationConflictRollback(t *testing.T) {
+	_, repo, svc := openSupplierRetailTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	subject := "sub-owner-rollback-" + suffix
+
+	supplier, err := repo.CreateSupplier(ctx, "sup-roll-"+suffix, "Rollback Test Supplier", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSupplier: %v", err)
+	}
+	if _, err := repo.CreateSupplierMember(ctx, supplier.ID, subject, "owner", "active"); err != nil {
+		t.Fatalf("CreateSupplierMember: %v", err)
+	}
+
+	// First capability creation with Seller Code A -> SUCCEEDS
+	draftA := RetailCapabilityDraft{
+		Code: "sel-roll-a-" + suffix,
+		Name: "Seller Rollback A",
+	}
+	sellerA, affA, err := svc.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplier.ID, draftA)
+	if err != nil {
+		t.Fatalf("CreateSupplierRetailCapabilityForSubject A: %v", err)
+	}
+
+	// Second capability creation attempt for SAME Supplier with UNIQUE Seller Code B
+	draftB := RetailCapabilityDraft{
+		Code:     "sel-roll-b-" + suffix,
+		Name:     "Seller Rollback B",
+		Settings: map[string]any{"key": "value_b"},
+	}
+	_, _, err = svc.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplier.ID, draftB)
+	if err == nil || !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected ErrConflict on second capability creation with different code, got %v", err)
+	}
+
+	// Verify database state:
+	// 1. Affiliation for Supplier remains 1 (sellerA)
+	aff, err := repo.GetSupplierSellerAffiliationBySupplierID(ctx, supplier.ID)
+	if err != nil || aff.SellerID != sellerA.ID || aff.SupplierID != affA.SupplierID {
+		t.Fatalf("unexpected affiliation state: err=%v aff=%+v", err, aff)
+	}
+
+	// 2. Seller A exists
+	_, err = repo.GetSellerByID(ctx, sellerA.ID)
+	if err != nil {
+		t.Fatalf("Seller A should exist, got %v", err)
+	}
+
+	// 3. Seller B DOES NOT EXIST (transaction rolled back completely)
+	sellers, err := repo.ListSellers(ctx, Page{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListSellers: %v", err)
+	}
+	for _, s := range sellers {
+		if s.Code == draftB.Code {
+			t.Fatalf("orphan Seller B (%s) found in database after conflict rollback!", draftB.Code)
+		}
+	}
+}
+
+func TestSupplierRetailCapability_ConcurrentProvisioning(t *testing.T) {
+	_, repo, svc := openSupplierRetailTestDB(t)
+	ctx := context.Background()
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	subject := "sub-owner-conc-" + suffix
+
+	supplier, err := repo.CreateSupplier(ctx, "sup-conc-"+suffix, "Concurrent Supplier", "active", nil)
+	if err != nil {
+		t.Fatalf("CreateSupplier: %v", err)
+	}
+	if _, err := repo.CreateSupplierMember(ctx, supplier.ID, subject, "owner", "active"); err != nil {
+		t.Fatalf("CreateSupplierMember: %v", err)
+	}
+
+	draftA := RetailCapabilityDraft{
+		Code: "sel-conc-a-" + suffix,
+		Name: "Concurrent Seller A",
+	}
+	draftB := RetailCapabilityDraft{
+		Code: "sel-conc-b-" + suffix,
+		Name: "Concurrent Seller B",
+	}
+
+	barrier := make(chan struct{})
+	type result struct {
+		seller Seller
+		aff    SupplierSellerAffiliation
+		err    error
+	}
+	resChan := make(chan result, 2)
+
+	go func() {
+		<-barrier
+		seller, aff, err := svc.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplier.ID, draftA)
+		resChan <- result{seller: seller, aff: aff, err: err}
+	}()
+
+	go func() {
+		<-barrier
+		seller, aff, err := svc.CreateSupplierRetailCapabilityForSubject(ctx, subject, supplier.ID, draftB)
+		resChan <- result{seller: seller, aff: aff, err: err}
+	}()
+
+	close(barrier)
+
+	res1 := <-resChan
+	res2 := <-resChan
+
+	successCount := 0
+	conflictCount := 0
+	var winnerCode string
+	var loserCode string
+
+	for _, res := range []result{res1, res2} {
+		if res.err == nil {
+			successCount++
+			winnerCode = res.seller.Code
+		} else if errors.Is(res.err, ErrConflict) {
+			conflictCount++
+		}
+	}
+
+	if successCount != 1 || conflictCount != 1 {
+		t.Fatalf("expected 1 success and 1 conflict, got %d successes and %d conflicts (err1=%v, err2=%v)", successCount, conflictCount, res1.err, res2.err)
+	}
+
+	if winnerCode == draftA.Code {
+		loserCode = draftB.Code
+	} else {
+		loserCode = draftA.Code
+	}
+
+	aff, err := repo.GetSupplierSellerAffiliationBySupplierID(ctx, supplier.ID)
+	if err != nil {
+		t.Fatalf("GetSupplierSellerAffiliationBySupplierID failed: %v", err)
+	}
+
+	winnerSeller, err := repo.GetSellerByID(ctx, aff.SellerID)
+	if err != nil || winnerSeller.Code != winnerCode {
+		t.Fatalf("winning seller check failed: err=%v winnerSeller=%+v winnerCode=%s", err, winnerSeller, winnerCode)
+	}
+
+	sellers, err := repo.ListSellers(ctx, Page{Limit: 100})
+	if err != nil {
+		t.Fatalf("ListSellers: %v", err)
+	}
+	for _, s := range sellers {
+		if s.Code == loserCode {
+			t.Fatalf("losing seller draft (%s) left orphan row in database!", loserCode)
+		}
+	}
+}
