@@ -417,6 +417,32 @@ func internalRoutes() []openapi.RouteSpec {
 			},
 			Responses: readResponses("Movement collection", CollectionResponse[commerce.InventoryMovement]{}),
 		},
+		{
+			Method: http.MethodGet, Path: "/internal/v1/suppliers/{supplierID}/retail-capability", OperationID: "internalGetSupplierRetailCapability",
+			Summary: "Get a supplier's explicit retail link and profile", Tags: []string{"Suppliers"},
+			Parameters: []openapi.ParameterSpec{pathParam("supplierID", "Supplier identifier")},
+			Responses:  readResponses("Supplier retail capability", SupplierRetailCapabilityResponse{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/suppliers/{supplierID}/retail-capability", OperationID: "internalCreateSupplierRetailCapability",
+			Summary: "Provision a seller profile and explicit 1:1 retail affiliation for a supplier", Tags: []string{"Suppliers"},
+			Parameters:  []openapi.ParameterSpec{pathParam("supplierID", "Supplier identifier")},
+			RequestBody: SupplierRetailCapabilityRequest{},
+			Responses:   createResponses("Provisioned supplier retail capability", SupplierRetailCapabilityResponse{}),
+		},
+		{
+			Method: http.MethodGet, Path: "/internal/v1/suppliers/{supplierID}/stores", OperationID: "internalListSupplierStores",
+			Summary: "List retail stores owned by the supplier's affiliated seller", Tags: []string{"Suppliers"},
+			Parameters: append([]openapi.ParameterSpec{pathParam("supplierID", "Supplier identifier")}, pageParams...),
+			Responses:  readResponses("Supplier stores collection", CollectionResponse[commerce.Store]{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/suppliers/{supplierID}/stores", OperationID: "internalCreateSupplierStore",
+			Summary: "Create a retail store owned by the supplier's affiliated seller", Tags: []string{"Suppliers"},
+			Parameters:  []openapi.ParameterSpec{pathParam("supplierID", "Supplier identifier")},
+			RequestBody: StoreCreateRequest{},
+			Responses:   createResponses("Created store", commerce.Store{}),
+		},
 
 		// --- Stores ---
 		{
