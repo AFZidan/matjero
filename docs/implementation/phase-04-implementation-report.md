@@ -34,17 +34,35 @@ The canonical git commit SHAs recorded at Phase 4 completion baseline are:
 | **P4.0** | `core` | #6 | `cabad67a6cc42147a1b2a36769bf2fba29c35e11` | `0955f7ff930523f51b851338b3886a2d684c985a` | MERGED | `docs/implementation/phase-04-native-storefront-theme-engine.md` | PASS |
 | **P4.1** | `core` | #7 | `12a7b427ef62b19658bd71d19bf0549760ca6276` | `016f8f45d6bd2c76621f61fa78240ee51701f804` | MERGED | `internal/storefront/store_resolver.go` | PASS |
 | **P4.2** | `core` | #8 | `54ab9c68b4def05bf0aeb3e2cc9ddba87a7801ee` | `8378f32590dba083050ac2b619ba5cbf511a38dd` | MERGED | `pkg/themes/service.go` | PASS |
-| **P4.3** | `core`<br>`seller` | #12<br>#1 | `c6167b96201af306db7074a9c045c9f025b7d268`<br>`cc2149fc3a1dc64fb4a9720635ee4950217da137` | `c63d084863d517599853b48bb3c262685a7b6ec9`<br>`b2441ee169f4ac614d3924c65ac74d314843d072` | MERGED | `pkg/storefront/catalog_repository.go`<br>`internal/storefrontapi/catalog.go` | PASS |
-| **Repo Indep.** | `core`<br>`seller`<br>`admin`<br>`supplier` | #13, #14, #15<br>#2, #3<br>#1, #2<br>#1, #2 | `cfba60226045c051174dc91094aa3a82700b382a`<br>`a93e4dad2397c5614747a59d47603f48d9865dd9`<br>`98cabc3edb31bef56097d08839d05ff1a77255fb`<br>`65b1fc4c22de9d1413d4074a1729016821f797f9` | `bfc9721cf628bed1985c917a66c053970e9fce1e`<br>`ad582046b3c2a93c8231cd2151c68c8c2b16d418`<br>`38c678171b77bdd65bf856e2de55229c945c5956`<br>`ba89cd608fbd91155de976aa108f040d6a8af38c` | MERGED | `docs/implementation/repository-independence-report.md` | PASS |
-| **P4.4** | `core`<br>`seller` | #16<br>#4 | `6834206be529621c2e6d615d4f6506342bdad620`<br>`638ec8d2e9f20e3dbb7227746ee03f3a6fa42eb6` | `5f1e0b75de1b645a9b3b33e7c394a453a1570323`<br>`a9d28d1f68252a0feba42205a73520897fb569b8` | MERGED | `pkg/commerce/storefront_revision.go`<br>`internal/storefrontcache/cache.go` | PASS |
+| **P4.3** | `core` | #12 | `c6167b96201af306db7074a9c045c9f025b7d268` | `c63d084863d517599853b48bb3c262685a7b6ec9` | MERGED | `pkg/storefront/catalog_repository.go` | PASS |
+| **P4.3** | `seller` | #1 | `cc2149fc3a1dc64fb4a9720635ee4950217da137` | `b2441ee169f4ac614d3924c65ac74d314843d072` | MERGED | `internal/storefrontapi/router.go` | PASS |
+| **Repo Indep.** | `core` | #13 | `cfba60226045c051174dc91094aa3a82700b382a` | `bfc9721cf628bed1985c917a66c053970e9fce1e` | MERGED | `docs/implementation/repository-independence-report.md` | PASS |
+| **Repo Indep.** | `core` | #14 | `01432bf0872eb79bc184fb057df93951a1583d23` | `1336f05751c2c47001d833ca201b748bfa37f793` | MERGED | N/A | PASS |
+| **Repo Indep.** | `core` | #15 | `9f76cade5e13b3ed56587da12b537762c45dde2c` | `c873f9e5605523d33f98ee300f7f8b8b7568a647` | MERGED | N/A | PASS |
+| **Repo Indep.** | `seller` | #2 | `a93e4dad2397c5614747a59d47603f48d9865dd9` | `ad582046b3c2a93c8231cd2151c68c8c2b16d418` | MERGED | N/A | PASS |
+| **Repo Indep.** | `seller` | #3 | `6c36eb203457cbe4f86489c41c555adee1fc1123` | `6600052f8bcef034cdd39383a5d5b6e02f9d0cb3` | MERGED | N/A | PASS |
+| **Repo Indep.** | `admin` | #1 | `98cabc3edb31bef56097d08839d05ff1a77255fb` | `38c678171b77bdd65bf856e2de55229c945c5956` | MERGED | N/A | PASS |
+| **Repo Indep.** | `admin` | #2 | `df7fba1879fd683d6465ed67aac9decd3f99bec9` | `c42c79bcf5698235784070ceb38e078caf38c982` | MERGED | N/A | PASS |
+| **Repo Indep.** | `supplier` | #1 | `65b1fc4c22de9d1413d4074a1729016821f797f9` | `ba89cd608fbd91155de976aa108f040d6a8af38c` | MERGED | N/A | PASS |
+| **Repo Indep.** | `supplier` | #2 | `e87d6d4586ed03f1a008fe6e39ab9bc3ba6c4b95` | `0d601c81b9ecd5b486f45a690f4e9a716efd12d5` | MERGED | N/A | PASS |
+| **P4.4** | `core` | #16 | `6834206be529621c2e6d615d4f6506342bdad620` | `5f1e0b75de1b645a9b3b33e7c394a453a1570323` | MERGED | `pkg/commerce/storefront_revision.go` | PASS |
+| **P4.4** | `seller` | #4 | `638ec8d2e9f20e3dbb7227746ee03f3a6fa42eb6` | `a9d28d1f68252a0feba42205a73520897fb569b8` | MERGED | `internal/storefrontcache/cache.go` | PASS |
 | **P4.5** | `seller` | #5 | `5b0cc0c47d821cf6dbd2a8b3b6c469d37c784b23` | `c4675d78420a7399aabc4a2dd4b17602d78adc72` | MERGED | `web/storefront/src/app/[locale]/(store)/` | PASS |
 | **P4.6** | `seller` | #6 | `637dd1d386e08507c7093b1092045f748eff436e` | `c7798b6ca0782a7d5eac367037a695bf8569483c` | MERGED | `web/storefront/src/server/seo.ts` | PASS |
-| **P4.7** | `core`<br>`seller` | #18, #19<br>#7, #8, #9, #10 | `0380854119f194c52f504768c609edf6961ee39c`<br>`4e2a26f22a128218358cac574b5e955abeb1fefc` | `a94d73d8bb2387e695a3bf85b950df77dc416d54`<br>`2c1a09b61d7ac809c229c81c861392f7d6d574ac` | MERGED | `docs/implementation/storefront-theme-preview-runtime-report.md`<br>`web/seller/src/components/ThemeManager.tsx` | PASS |
+| **P4.7** | `core` | #18 | `0380854119f194c52f504768c609edf6961ee39c` | `e3e7feb2d04e45e964c1e5cbc82aabf4b12754db` | MERGED | `docs/implementation/storefront-theme-preview-runtime-report.md` | PASS |
+| **P4.7** | `core` | #19 | `f0638c28255f827213d25f7273ceb1b44a18bbac` | `a94d73d8bb2387e695a3bf85b950df77dc416d54` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #7 | `1490e4591d2e39f8142976be4b991d2675d7d4ed` | `664e7c124c844c0a50bb5ab6578dd9612558a1d6` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #8 | `2cff72ef337a3f83c74b7cc3148424cca209d676` | `bf70c50af50ca8ed1f9a09ab4f5eb7bf2bee7892` | MERGED | N/A | PASS |
+| **P4.7** | `seller` | #9 | `4e2a26f22a128218358cac574b5e955abeb1fefc` | `acc613d1c3fde592d2c4915de5127861cfca5456` | MERGED | `web/seller/src/components/ThemeEditorPanel.tsx` | PASS |
+| **P4.7** | `seller` | #10 | `8ba140e1d48b12ad4e8a1a246142d8d56a2e3940` | `2c1a09b61d7ac809c229c81c861392f7d6d574ac` | MERGED | N/A | PASS |
 | **P4.8A**| `core` | #20 | `781e8e928035708cbbcd73372b4f18e1751c7ed4` | `96cf98e5a1f1de3f388a86e316b5b59414d49d11` | MERGED | `pkg/commerce/domain_lifecycle.go` | PASS |
 | **P4.8B**| `seller` | #11 | `29b96a4716a30e9fe6253bf7d9c8fcaec45de531` | `1354a9ab2d4e001b5ac5ac13aaac958aa69505c7` | MERGED | `internal/sellerapi/domains.go` | PASS |
-| **P4.8C**| `admin` | #3, #4, #5, #6 | `26ea097c3bd87ad27bec5b76e8788a12a5b28bf6` | `5c3a3bacaa2131670294af1f254d417ed09310ae` | MERGED | `docs/implementation/admin-domain-moderation-report.md` | PASS |
-| **Post-P4.10 Fix**| `admin` | #7 | `c2a3b034564a3eae45fb508080134ad6b78b21af` | `50b54117b201d10203d5b8b2bb943b3a6fb66d3c` | MERGED | `.github/workflows/ci.yml` (npm audit reproducibility) | PASS |
-| **Prereq**| `core` | #21 | `d7e36be5cc1e64e50a913bef6521d135c645cca9` | `a466e5166e844a64215362c288f3c353f702d7a2` | MERGED | `internal/supplierretail/service.go` | PASS |
+| **P4.8C**| `admin` | #3 | `e1b5c65b828a78cf910b04481ad509493d0161c0` | `5b9d16c26a52c4faa0cd7193d975841cb1ecde7f` | MERGED | N/A | PASS |
+| **P4.8C**| `admin` | #4 | `6d22220c5a75610051855832c6b1f2308d334397` | `c611db032a35096663e0013f5211b943d582428a` | MERGED | `docs/implementation/admin-domain-moderation-report.md` | PASS |
+| **P4.8C**| `admin` | #5 | `8f2dca2e102fb568b1276ff7767569fab11aa0cc` | `5c6d0b53f4118774fa96ce01a1a45605dbdfb390` | MERGED | N/A | PASS |
+| **P4.8C**| `admin` | #6 | `26ea097c3bd87ad27bec5b76e8788a12a5b28bf6` | `5c3a3bacaa2131670294af1f254d417ed09310ae` | MERGED | N/A | PASS |
+| **Post-P4.10 Fix**| `admin` | #7 | `c2a3b034564a3eae45fb508080134ad6b78b21af` | `50b54117b201d10203d5b8b2bb943b3a6fb66d3c` | MERGED | `.github/workflows/ci.yml` | PASS |
+| **Prereq**| `core` | #21 | `d7e36be5cc1e64e50a913bef6521d135c645cca9` | `a466e5166e844a64215362c288f3c353f702d7a2` | MERGED | `docs/implementation/supplier-retail-capability-report.md` | PASS |
 | **P4.9** | `seller` | #12 | `675f1c26958d758ab45b757dbc720008c6d0b9c2` | `d75f84c66cfca9ab4c79c8a3495c5080be28a7af` | MERGED | `docs/implementation/storefront-performance-security-regression-report.md` | PASS |
 | **P4.10**| `core` | #22 | `a4be416aea0b903795b620bb7f60f9f09951c182` | `9dffa2d700a1d0130efdad45beaf7e218bfa1f09` | MERGED | `docs/implementation/phase-04-implementation-report.md` | PASS |
 
@@ -58,11 +76,11 @@ Customer Browser
       ▼ (HTTP/HTTPS)
 Next.js Storefront App (web/storefront)
       │
-      ▼ HTTP JSON (X-Matjero-Storefront-Host)
+      ▼ HTTP JSON (Host header)
 Seller storefront-api BFF
       ├──► Seller Redis Cache (storefront response payloads, keyed by host + revision)
       │
-      ▼ HTTP JSON (X-Matjero-Service: seller, Bearer Service Token)
+      ▼ HTTP JSON (X-Matjero-Service: seller, Bearer Service Token, X-Matjero-Storefront-Host)
 Core core-api
       ├──► PostgreSQL DB (authoritative state: store, domain, catalog, themes, revisions)
       └──► RabbitMQ Broker (asynchronous events: outbox foundation)
@@ -179,7 +197,7 @@ Seller administrators manage storefront aesthetics via Seller Dashboard (`web/se
 - Browse available platform themes and active version updates.
 - Install, configure, and edit theme settings through a schema-validated UI form.
 - Generate secure draft preview URLs and test live changes in an isolated iframe / tab.
-- Publish draft configurations atomically to live storefronts (`POST /v1/seller/themes/{id}/publish`).
+- Publish draft configurations atomically to live storefronts (`POST /v1/seller/stores/{store_id}/theme/publish`).
 
 ---
 
@@ -189,7 +207,7 @@ Platform administrators control custom domain governance via Admin API and Web (
 
 - Platform-wide domain listing & filtering (`GET /v1/admin/domains`).
 - Admin moderation actions: Disable custom domain (`POST /v1/admin/domains/{id}/disable`), Re-enable custom domain (`POST /v1/admin/domains/{id}/enable`).
-- Canonical ownership: Seller handles domain registration (`POST /v1/domains`), verification (`POST /v1/domains/{id}/verify`), and activation (`POST /v1/domains/{id}/activate`). Admin handles platform-wide audit, disable, and re-enable.
+- Canonical ownership: Seller handles domain registration (`POST /v1/seller/stores/{store_id}/domains`), verification (`POST /v1/seller/stores/{store_id}/domains/{domain_id}/verify`), and activation (`POST /v1/seller/stores/{store_id}/domains/{domain_id}/activate`). Admin handles platform-wide audit, disable, and re-enable.
 - Fully audited actions enforcing `RolePlatformAdmin` authorization.
 
 ---
@@ -198,11 +216,15 @@ Platform administrators control custom domain governance via Admin API and Web (
 
 Merged prerequisite (Core PR #21, migration `000009_supplier_retail_capability`):
 
-- **Explicit Affiliation**: Establishes 1:1 retail capability affiliation between Supplier and Seller/Store.
+- **Explicit Affiliation**: Establishes 1:1 retail capability affiliation between Supplier and Seller.
 - **Store Single Ownership**: `stores` table maintains single ownership (`seller_id` only, no `supplier_id` column).
 - **OWN / NETWORK Sourcing**: Derived dynamically from Supplier Offer ownership without persisting artificial `source_type` columns.
 - **Owner Governance**: Retail provisioning restricted exclusively to active Supplier `OWNER` users.
-- **Supplier-Service-Only Routes**: Retail capability routes exist exclusively in Supplier service.
+- **Core-owned internal Supplier Retail capability routes, accessible only with Supplier service identity. Supplier frontend / Supplier API retail bridge remains deferred:**
+  - `GET  /internal/v1/suppliers/{supplierID}/retail-capability`
+  - `POST /internal/v1/suppliers/{supplierID}/retail-capability`
+  - `GET  /internal/v1/suppliers/{supplierID}/stores`
+  - `POST /internal/v1/suppliers/{supplierID}/stores`
 
 ---
 
@@ -370,15 +392,18 @@ The following functional areas remain explicitly out of scope for Phase 4:
 
 ## 24. What Is Next
 
-With Phase 4 (Native Storefront & Theme Engine) fully complete and verified, the project is ready to transition to **Phase 5 — Commerce Operations (Cart, Checkout & Order Processing)**.
+With Phase 4 (Native Storefront & Theme Engine) fully complete and verified, the project is ready to transition to **Phase 5 — Cart, Checkout, Orders and Inventory Transactions**.
 
 Architectural highlights for Phase 5:
-- **Cart & Session Management**: Customer cart persistence, multi-currency price recalculation, and promotion application.
-- **Checkout Engine**: Guest and authenticated customer checkout flows, address validation, and shipping method selection.
-- **Inventory Reservation**: Transactional outbox-driven inventory reservation during checkout to prevent overselling.
-- **Order Lifecycle**: Order state transitions (`PENDING`, `CONFIRMED`, `FULFILLED`, `CANCELLED`) backed by Core PostgreSQL.
-- **Payment & Settlement Boundaries**: Integration interfaces for payment gateways and seller ledger entries.
-- **RabbitMQ Async Flows**: Async order placement events, notification triggers, and inventory sync consumers.
+- **Entities**: Customer, Customer Address, Cart, Cart Item, Checkout Session, Order, Order Item, Order Timeline, Order Note.
+- **Order Lifecycle**: Explicit state machine spanning `PENDING`, `CONFIRMED`, `PROCESSING`, `READY_FOR_SHIPPING`, `SHIPPED`, `OUT_FOR_DELIVERY`, `DELIVERED`, `CANCELLED`, `RETURNED`.
+- **Checkout Critical Path**: Validate Store, Validate Market, Validate Listings, Validate Prices, Reserve Inventory, Create Order, Create Order Items, Create Outbox Events, Commit, Return Order.
+- **Transactional Outbox**: PostgreSQL Transactional Outbox foundation.
+- **Outbox Publishing**: Polling Outbox Publisher pushing to RabbitMQ Event Transport.
+- **Consumer Inbox / Idempotency**: processed event identity is `consumer_name` + `event_id`. Duplicate event delivery must be ignored safely.
+- **Event Ordering**: causal ordering uses `aggregate_id` + `aggregate_version`. Timestamps are not authoritative ordering.
+
+All Phase 6 (Shipping method/provider) and Phase 7 (Payment gateway, settlement) capabilities remain strictly out of scope for Phase 5.
 
 ---
 
