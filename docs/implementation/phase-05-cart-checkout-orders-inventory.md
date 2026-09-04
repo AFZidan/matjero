@@ -21,31 +21,38 @@ PostgreSQL transaction**:
 
 ```
 BEGIN
-  1. SELECT checkout_session FOR UPDATE (by id)
+  1. At Checkout Session creation, generate a cryptographically secure,
+     high-entropy guest Order capability; persist only its digest on the
+     Checkout Session and return the raw capability once through the secure
+     Core → storefront-api response boundary.
+
+  2. SELECT checkout_session FOR UPDATE (by id)
      - Freeze one transaction timestamp: $transaction_now
      - If status = 'expired': ROLLBACK → return checkout_expired
      - If status = 'open' AND expires_at <= $transaction_now:
        ROLLBACK → return checkout_expired
      - Only status = 'open' AND expires_at > $transaction_now may finalize
 
-  2. SELECT cart FOR UPDATE (by id & store_id)
-     - Assert cart status = 'active' (or 'finalized' during replay)
+  3. SELECT cart FOR UPDATE (by id & store_id)
+     - If checkout_session.status = 'open', require cart.status = 'active'
+     - If checkout_session.status = 'finalized', require cart.status = 'checked_out'
+     - Any other pair is an internal invariant failure; do not create another Order
 
-  3. Load Cart Items in deterministic order (by seller_listing_id, sku_id ASC)
+  4. Load Cart Items in deterministic order (by seller_listing_id, sku_id ASC)
 
-  4. Compute server-side canonical fingerprint from:
+  5. Compute server-side canonical fingerprint from:
      - checkout_session_id
      - cart_id
      - sorted cart lines (seller_listing_id, sku_id, quantity, expected_unit_price_minor, expected_currency_code)
-     - shipping_address_snapshot & contact_email
+     - canonical finalize-request delivery address & contact email
      - customer_id (if present)
 
-  5. If checkout_session.status = 'finalized':
+  6. If checkout_session.status = 'finalized':
      - Compare computed fingerprint with stored finalize_fingerprint
      - If matching: SELECT order WHERE checkout_session_id = $1 → COMMIT → return Order
      - If mismatch: ROLLBACK → return idempotency_conflict
 
-  6. If open:
+  7. If open:
      - Freeze single confirmation deadline: $deadline = transaction_now + configured_duration
      - Lock candidate Inventory Snapshots FOR UPDATE (ordered deterministically by id ASC)
      - Validate the complete guest checkout payload before creating any Order or reservation
@@ -57,13 +64,13 @@ BEGIN
      - Insert Order Items (referencing inventory_reservation_id, fulfillment_location_id, supplier_offer_id)
      - Insert Order Address & Order Timeline entry
      - Insert Outbox Event (commerce.order.created)
-     - Generate a high-entropy guest Order access token; persist only its digest
+     - Copy checkout_session.guest_order_access_token_digest to the Order
      - Update Checkout Session (status = 'finalized', finalize_fingerprint = $computed_fingerprint, finalized_at = $transaction_now)
      - Update Cart (status = 'checked_out')
 COMMIT
 ```
 
-All steps commit or roll back together. Any validation failure (e.g. `price_changed`, `insufficient_inventory`, `checkout_expired`, or money overflow) causes a transaction rollback. A timestamp-expired `open` session returns `checkout_expired` and creates no reservation, Order, timeline, or outbox event. A finalized session is the sole replay exception: it may return its already-created Order after `expires_at`, but it cannot create another Order or side effect.
+All steps commit or roll back together. Any validation failure (e.g. `price_changed`, `insufficient_inventory`, `checkout_expired`, or money overflow) causes a transaction rollback. A timestamp-expired `open` session returns `checkout_expired` and creates no reservation, Order, timeline, or outbox event. A finalized session is the sole replay exception: it may return its already-created Order after `expires_at`, but only when its Cart is `checked_out`; it cannot create another Order, capability, or side effect.
 
 ---
 
@@ -143,13 +150,14 @@ Phase 4 delivered:
 | Order sequence | Monotonic per-Store order numbers generated via atomic updates on a dedicated `store_order_sequences` table. Formatted as stable Store-local strings (e.g. `#100001`). |
 | Single frozen deadline | Compute `$deadline = transaction_now + configured_duration` ONCE inside checkout. Use exact same `$deadline` value for `orders.confirmation_deadline_at` and `inventory_reservations.expires_at`. |
 | Inventory movement delta | `quantity_delta` in `inventory_movements` strictly represents `on_hand_qty` delta. Reservation events (`held`, `released`, `expired`) write `quantity_delta = 0`. Confirmation (`consumed`) writes `quantity_delta = -quantity`. Restock writes `quantity_delta = +quantity`. |
-| Outbox lease & renewal | Multi-publisher outbox claims use explicit columns (`publish_claim_id`, `publish_claimed_at`, `publish_attempts`, `next_attempt_at`). Events near lease expiry are renewed atomically before publishing. |
+| Outbox lease & renewal | Multi-publisher outbox claims use explicit columns (`publish_claim_id`, `publish_claimed_at`, `publish_attempts`, `next_attempt_at`). Every event is atomically revalidated and renewed immediately before publish; `RABBITMQ_PUBLISH_CONFIRM_TIMEOUT` is shorter than the claim lease. |
 | Seller-owned inventory | `fulfillment_locations` supports Store-scoped ownership (`store_id NOT NULL`, `supplier_id NULL`) alongside Supplier-scoped ownership. |
 | Price change handling | Authoritative price amount and currency re-read inside checkout transaction. Amount or currency mismatch with Cart snapshot rejects with `price_changed`; listing currency inconsistent with Store Market rejects with `market_mismatch` / invariant failure according to the current error contract. |
 | Order currency | `orders.currency_code` is exactly `Store Market.currency_code`; every Order Item uses the same currency. Cross-currency arithmetic is forbidden. |
 | Checkout expiry authority | `checkout_sessions.expires_at` is authoritative. Finalization requires `status = 'open' AND expires_at > $transaction_now`; cleanup may persist `expired` but correctness does not depend on cleanup. Finalized replay returns the existing Order even after expiry. |
 | Money arithmetic | Monetary values are signed 64-bit minor units. Each multiplication and subtotal addition uses checked arithmetic; overflow returns `validation_error` and rolls back the entire checkout. |
-| Guest Order access | Successful guest checkout creates a dedicated high-entropy bearer capability. Core persists only `guest_order_access_token_digest`; Storefront operations require both the resolved Store and the capability. |
+| Guest Order access | Checkout Session creation creates a dedicated high-entropy bearer capability before an Order exists. Core persists only `guest_order_access_token_digest`; Storefront operations require both the resolved Store and the capability. |
+| Capability issuance timing | A guest capability is generated when the Checkout Session is created, stored only as `checkout_sessions.guest_order_access_token_digest`, and returned once through the secure Storefront session/cookie boundary. Finalization copies that digest to the Order and never generates or rotates a capability. |
 
 ---
 
@@ -383,6 +391,7 @@ No persistent `finalizing` or `failed` states are stored in the database. Valida
 | `shipping_address_snapshot` | `JSONB` | Nullable (address snapshot) |
 | `contact_email` | `TEXT` | Nullable |
 | `finalize_fingerprint` | `TEXT` | Nullable (server-computed deterministic SHA-256 fingerprint) |
+| `guest_order_access_token_digest` | `BYTEA` | NOT NULL for Phase 5 Guest Checkout Sessions; SHA-256 digest of a dedicated high-entropy capability |
 | `finalized_at` | `TIMESTAMPTZ` | Nullable |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() |
 | `updated_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() |
@@ -392,7 +401,15 @@ No persistent `finalizing` or `failed` states are stored in the database. Valida
 - `FOREIGN KEY (cart_id, store_id) REFERENCES carts(id, store_id) ON DELETE RESTRICT`
 - `FOREIGN KEY (customer_id, store_id) REFERENCES customers(id, store_id) ON DELETE RESTRICT`
 
-*Note:* `checkout_sessions.expires_at` governs pre-finalization session validity. Post-checkout confirmation deadline is stored separately on `orders.confirmation_deadline_at`.
+**Creation invariant:** For a Phase 5 Guest Checkout Session, Core generates a
+cryptographically secure high-entropy raw capability in memory, stores only its
+SHA-256 digest in `guest_order_access_token_digest`, and returns the raw value
+once through the authenticated Core → `storefront-api` response. The raw value
+is never stored in Core DB, logs, analytics, event payloads, URLs, localStorage,
+Seller DTOs, or Supplier DTOs. A Phase 5 guest session cannot be finalized with
+a missing digest.
+
+*Note:* `checkout_sessions.expires_at` governs pre-finalization session validity. Post-checkout confirmation deadline is stored separately on `orders.confirmation_deadline_at`. If Session creation succeeds but its response is lost, no Order exists and the caller may create another Session safely. Future authenticated flows may make the guest capability digest nullable only when a verified Customer identity model is active.
 
 ---
 
@@ -424,13 +441,13 @@ No persistent `finalizing` or `failed` states are stored in the database. Valida
 
 ### 12.1 Server-Computed Idempotency Fingerprint
 
-The client submits semantic inputs only (`session_id`, delivery address, contact email). It does NOT submit an opaque fingerprint string.
+The client submits semantic inputs only (`session_id`, delivery address, contact email). It does NOT submit an opaque fingerprint string. This document chooses the direct semantic-input model: the finalize request is authoritative for delivery address and contact email; no separate Checkout Session update is required before finalization.
 
-After locking the Checkout Session and parent Cart, and after loading Cart lines in deterministic order, Core computes `finalize_fingerprint` as a SHA-256 digest of a canonical JSON payload containing:
+After locking the Checkout Session and parent Cart, and after loading Cart lines in deterministic order, Core canonicalizes the finalize request and computes `finalize_fingerprint` as a SHA-256 digest of a canonical JSON payload containing:
 - `checkout_session_id`
 - `cart_id`
 - Sorted list of Cart line items: `(seller_listing_id, sku_id, quantity, expected_unit_price_minor, expected_currency_code)`
-- Address snapshot & contact details
+- Canonical delivery address & contact details from the finalize request
 - Customer context (`customer_id` if present)
 
 ### 12.2 Single-Transaction Flow & Execution Order
@@ -454,7 +471,15 @@ END IF;
 
 -- 3. Lock Parent Cart Row
 SELECT * FROM carts WHERE id = checkout_session.cart_id AND store_id = checkout_session.store_id FOR UPDATE;
-ASSERT carts.status = 'active' OR checkout_session.status = 'finalized';
+
+IF checkout_session.status = 'open' AND carts.status <> 'active' THEN
+  ROLLBACK;
+  RETURN internal_error(reason = 'checkout_cart_status_invariant');
+END IF;
+IF checkout_session.status = 'finalized' AND carts.status <> 'checked_out' THEN
+  ROLLBACK;
+  RETURN internal_error(reason = 'checkout_cart_status_invariant');
+END IF;
 
 -- 4. Load Cart Items in deterministic order (by seller_listing_id, sku_id ASC)
 -- 5. Compute server-side canonical fingerprint from loaded inputs
@@ -463,6 +488,7 @@ ASSERT carts.status = 'active' OR checkout_session.status = 'finalized';
 IF checkout_session.status = 'finalized' THEN
   IF checkout_session.finalize_fingerprint = $computed_fingerprint THEN
     SELECT * FROM orders WHERE checkout_session_id = $session_id;
+    -- Require the existing Order and checked_out Cart; do not mutate the session.
     COMMIT;
     RETURN existing_order;
   ELSE
@@ -481,13 +507,15 @@ END IF;
 --    g. Lock candidate inventory_snapshots (ordered by id ASC)
 --    h. Reserve inventory (insert inventory_reservations status='held', expires_at = $deadline)
 --    i. Allocate Order Number from store_order_sequences
---    j. Generate raw guest capability in memory; persist only its digest
---    k. Insert Order (currency_code = Store Market.currency_code, confirmation_deadline_at = $deadline, guest_order_access_token_digest = digest)
+--    j. Copy checkout_session.guest_order_access_token_digest without generating or rotating a capability
+--    k. Insert Order (currency_code = Store Market.currency_code, confirmation_deadline_at = $deadline, guest_order_access_token_digest = checkout_session.guest_order_access_token_digest)
 --    l. Insert Order Items (currency_code = orders.currency_code, referencing inventory_reservation_id, fulfillment_location_id, supplier_offer_id)
 --    m. Insert Order Address & Order Timeline (to_status='pending', actor_type='checkout')
 --    n. Insert Outbox Event (commerce.order.created)
---    o. Update Checkout Session: status = 'finalized', finalize_fingerprint = $computed_fingerprint, finalized_at = $transaction_now
---    p. Update Cart: status = 'checked_out'
+--    o. Persist the exact canonical address/contact snapshot used by this Order
+--    p. Update Checkout Session: status = 'finalized', finalize_fingerprint = $computed_fingerprint, finalized_at = $transaction_now
+--    q. Assert guest Order digest IS NOT NULL
+--    r. Update Cart: status = 'checked_out'
 
 COMMIT;
 ```
@@ -497,6 +525,10 @@ COMMIT;
 - **Concurrent finalization requests:** The second request blocks on `SELECT ... FOR UPDATE` on `checkout_sessions`. When the first transaction commits, the second request wakes, loads cart lines, computes fingerprint, reads `status = 'finalized'`, verifies fingerprint match, and returns the existing Order.
 - **Crash before COMMIT:** Entire transaction rolls back; session remains `open`; cart remains `active`.
 - **Crash after COMMIT before HTTP response:** Retried request hits step 6, sees `status = 'finalized'`, verifies fingerprint, and returns the existing Order.
+- **Capability response loss:** The capability was issued when the Checkout Session was created, before any Order existed. A lost finalization response therefore does not strand the Customer; replay returns the same Order and the Storefront still holds the same capability.
+- **Capability reuse:** Finalization copies the existing Session digest to the Order. It never creates, rotates, or returns a new capability.
+- **Cart/session invariant:** Replay is valid only for `status = 'finalized'` with `cart.status = 'checked_out'`. Any other pair is an internal invariant failure and creates no new Order.
+- **Semantic replay:** The finalized request's canonical address/contact values are compared through `finalize_fingerprint` before any mutation. Changed values return `idempotency_conflict`; stored finalized inputs are never overwritten.
 - **Validation failures:** Validation errors (e.g. `price_changed`, `insufficient_inventory`) cause ROLLBACK, leaving `checkout_sessions` in `open` state so the Customer may retry.
 - **Timestamp expiry:** An `open` session is finalizable only when `expires_at > $transaction_now`. A stale `open` row cannot finalize even if lifecycle cleanup has not changed its status. The transaction creates no reservation, Order, timeline, or outbox event on expiry.
 - **Finalized replay after expiry:** A `finalized` session may replay after its original `expires_at`; after fingerprint verification it returns the same existing Order only. It never creates a new Order, capability, reservation, timeline, or outbox event.
@@ -674,6 +706,12 @@ code is unique within its owning Supplier Market or Store.
 - `FOREIGN KEY (customer_id, store_id) REFERENCES customers(id, store_id) ON DELETE RESTRICT`
 - `FOREIGN KEY (checkout_session_id, store_id) REFERENCES checkout_sessions(id, store_id) ON DELETE RESTRICT`
 
+**Guest Order invariant:** Conceptually enforce
+`customer_id IS NOT NULL OR guest_order_access_token_digest IS NOT NULL`.
+Phase 5 guest Orders therefore always contain a non-null capability digest;
+future authenticated Orders may omit it only when a verified Customer identity
+model is active.
+
 #### `order_items` Table
 
 | Column | Type | Constraints |
@@ -743,12 +781,44 @@ code is unique within its owning Supplier Market or Store.
 
 ---
 
-## 18. Order State Machine
+## 18. Seller Confirmation Deadline Enforcement
+
+Every Seller `PENDING → CONFIRMED` operation starts one PostgreSQL transaction
+and freezes `$transaction_now = transaction_timestamp()`. It acquires the
+existing Order transition lock family in this exact order:
+
+1. `orders` row `FOR UPDATE`.
+2. Linked `inventory_snapshots` rows `FOR UPDATE`, ordered by `id ASC`.
+3. Linked `inventory_reservations` rows `FOR UPDATE`, ordered by `id ASC`.
+
+Only after all locks are acquired may confirmation proceed, and only when:
+
+- `orders.status = 'pending'`;
+- `orders.confirmation_deadline_at > $transaction_now`;
+- every linked reservation has `status = 'held'`; and
+- every linked reservation has `expires_at > $transaction_now`.
+
+The reservation expiry and Order confirmation deadline were frozen to the same
+value at checkout. Any disagreement is an internal invariant failure. At or
+after the deadline (`$transaction_now >= confirmation_deadline_at`), Seller
+confirmation returns the existing conflict/invalid-transition contract with
+internal reason `confirmation_deadline_elapsed`; it does not consume a
+reservation or change `on_hand_qty`. The expiry worker remains responsible for
+the timeout cancellation and may later transition the stale PENDING Order.
+
+The exact boundary is deterministic: confirmation is valid only when
+`transaction_now < confirmation_deadline_at`. If Seller confirmation locks the
+Order before the deadline, it may win and the later expiry worker observes a
+non-pending Order and no-ops. If expiry locks at or after the deadline first, it
+cancels the Order and Seller confirmation later observes a non-pending Order and
+no-ops. Exactly one terminal outcome is committed.
+
+## 19. Order State Machine
 
 | From | To | Authority | Precondition | Inventory Effect | Outbox Event |
 |---|---|---|---|---|---|
 | — | `pending` | Checkout | Checkout validation pass | `held` (reserved_qty += qty) | `commerce.order.created` |
-| `pending` | `confirmed` | Seller | — | `consumed` (on_hand -= qty, reserved -= qty) | `commerce.order.status_changed` |
+| `pending` | `confirmed` | Seller | `confirmation_deadline_at > $transaction_now` and every linked reservation is `held` with `expires_at > $transaction_now` | `consumed` (on_hand -= qty, reserved -= qty) | `commerce.order.status_changed` |
 | `pending` | `cancelled` | Customer / Seller | — | `released` (reserved -= qty) | `commerce.order.status_changed` |
 | `pending` | `cancelled` | Scheduler | `confirmation_deadline_at <= now()` | `expired` (reserved -= qty) | `commerce.order.status_changed` |
 | `confirmed` | `processing` | Seller | — | None | `commerce.order.status_changed` |
@@ -760,7 +830,7 @@ Transitions from `ready_for_shipping` onward (`shipped`, `out_for_delivery`, `de
 
 ---
 
-## 19. Reservation Expiry Workflow (Two-Stage Locking)
+## 20. Reservation Expiry Workflow (Two-Stage Locking)
 
 To prevent lock retention across non-transactional boundaries, the reservation expiry scheduler executes in two explicit stages:
 
@@ -783,11 +853,13 @@ For EACH candidate Order ID from Stage 1, execute a dedicated PostgreSQL transac
 ```sql
 BEGIN;
 
+SELECT transaction_timestamp() AS transaction_now;
+
 -- Lock Order row & re-verify status & deadline
 SELECT * FROM orders
 WHERE id = $order_id
   AND status = 'pending'
-  AND confirmation_deadline_at <= now()
+  AND confirmation_deadline_at <= $transaction_now
 FOR UPDATE;
 
 -- If row not found (already confirmed, cancelled, or handled by another worker)
@@ -806,6 +878,7 @@ FOR UPDATE;
 SELECT * FROM inventory_reservations
 WHERE id = ANY($reservation_ids)
   AND status = 'held'
+ORDER BY id ASC
 FOR UPDATE;
 
 -- Execute state changes
@@ -840,9 +913,9 @@ COMMIT;
 
 ---
 
-## 20. Outbox Multi-Publisher Lease & Per-Event Renewal
+## 21. Outbox Multi-Publisher Lease & Per-Event Renewal
 
-### 20.1 Schema Extension & Partial Index
+### 21.1 Schema Extension & Partial Index
 
 Migration F adds claim columns and partial index to `outbox_events`:
 
@@ -859,7 +932,7 @@ ON outbox_events (next_attempt_at, created_at, event_id)
 WHERE published_at IS NULL;
 ```
 
-### 20.2 Bounded Claim & Per-Event Lease Renewal
+### 21.2 Bounded Claim & Per-Event Lease Renewal
 
 Runtime duration configuration: `OUTBOX_CLAIM_LEASE_DURATION` (default 30 seconds).
 `OUTBOX_CLAIM_RENEWAL_MARGIN` is a separate configuration and MUST satisfy:
@@ -890,27 +963,41 @@ WHERE event_id = ANY($claimed_ids);
 COMMIT;
 ```
 
-2. **Per-Event Renewal Before Publish:**
+2. **Per-Event Ownership Revalidation Before Every Publish:**
    Define the lease timestamps explicitly:
    ```
    lease_expires_at = publish_claimed_at + OUTBOX_CLAIM_LEASE_DURATION
    remaining_lease  = lease_expires_at - now()
    ```
    `now() - publish_claimed_at` is elapsed lease age, not remaining lease
-   duration. Before publishing each event in the claimed batch:
-   - If `remaining_lease <= OUTBOX_CLAIM_RENEWAL_MARGIN`, atomically renew:
-     ```sql
-     UPDATE outbox_events
-     SET publish_claimed_at = now()
-     WHERE event_id = $event_id
-       AND publish_claim_id = $current_claim
-       AND published_at IS NULL
-       AND publish_claimed_at >=
-           now() - OUTBOX_CLAIM_LEASE_DURATION;
-     ```
-   - If renewal update affects 0 rows, **DO NOT publish** that event.
+   duration. Before EVERY individual RabbitMQ publish, atomically revalidate
+   and renew ownership, regardless of the remaining lease:
+   ```sql
+   UPDATE outbox_events
+   SET publish_claimed_at = now()
+   WHERE event_id = $event_id
+     AND publish_claim_id = $current_claim
+     AND published_at IS NULL
+     AND publish_claimed_at >=
+         now() - OUTBOX_CLAIM_LEASE_DURATION;
+   ```
+   If rows affected is `0`, **DO NOT publish** that event. The renewal margin
+   remains useful for proactive batch work, but correctness never depends on
+   checking it before network I/O.
 
-3. **Publisher Confirm Acknowledge:**
+3. **Bounded RabbitMQ Publish Confirm:**
+   `RABBITMQ_PUBLISH_CONFIRM_TIMEOUT` is required and MUST satisfy:
+   ```
+   0 < RABBITMQ_PUBLISH_CONFIRM_TIMEOUT
+     < OUTBOX_CLAIM_LEASE_DURATION
+   ```
+   with a documented operational safety margin. If broker confirmation does
+   not complete within that timeout, treat the publish as failed/unknown and do
+   not mark the event published unless the matching current claim still exists.
+   A late broker delivery may create a duplicate; this remains valid
+   at-least-once behavior handled by Consumer Inbox.
+
+4. **Publisher Confirm Acknowledge:**
 ```sql
 UPDATE outbox_events
 SET published_at = now(),
@@ -921,7 +1008,7 @@ WHERE event_id = $1
   AND published_at IS NULL;
 ```
 
-4. **Broker Failure Backoff:**
+5. **Broker Failure Backoff:**
 ```sql
 UPDATE outbox_events
 SET publish_attempts = publish_attempts + 1,
@@ -936,16 +1023,17 @@ Events are NEVER deleted or silently discarded due to publish failure.
 
 ---
 
-## 21. Event Catalog
+## 22. Event Catalog
 
 - `commerce.order.created` (schema_version: 1) — Emitted when a PENDING Order is created.
 - `commerce.order.status_changed` (schema_version: 1) — Emitted on Order status transitions.
 
-Payloads are privacy-safe: no PII, no wholesale costs, no internal location or reservation IDs.
+Payloads are privacy-safe: no PII, no wholesale costs, no internal location or
+reservation IDs, no raw guest capabilities, and no guest capability digests.
 
 ---
 
-## 22. RabbitMQ Topology & Consumer Inbox
+## 23. RabbitMQ Topology & Consumer Inbox
 
 - Exchange: `commerce.events` (topic, durable).
 - Routing Keys: `order.created`, `order.status_changed`.
@@ -953,7 +1041,7 @@ Payloads are privacy-safe: no PII, no wholesale costs, no internal location or r
 
 ---
 
-## 23. Event Ordering
+## 24. Event Ordering
 
 Duplicate suppression and event ordering are distinct concerns:
 
@@ -978,27 +1066,39 @@ is required until a real consumer requires one.
 
 ---
 
-## 24. API Boundaries
+## 25. API Boundaries
 
 - `storefront-api` (in `matjeroapps/seller`): Public anonymous routes `/v1/storefront/carts`, `/v1/storefront/checkout/sessions`, `GET /v1/storefront/orders/{order_id}`, and `POST /v1/storefront/orders/{order_id}/cancel` (exact path may follow the existing router convention).
 - `seller-api` (in `matjeroapps/seller`): Authenticated routes `/v1/seller/stores/{store_id}/orders`.
 - `core-api` (in `matjeroapps/core`): Internal authenticated routes `/internal/v1/...`.
 
-### 24.1 Secure Guest Order Access
+### 25.1 Secure Guest Order Access
 
 Phase 5 Guest Checkout uses a dedicated Order access capability; Customer IAM
-is deferred. On successful checkout, Core generates a cryptographically secure,
-high-entropy random token and persists only its digest in
-`orders.guest_order_access_token_digest`. The raw token is returned only through
-the secure Storefront session/cookie boundary (Secure, HttpOnly, and an
-appropriate SameSite policy); it is never logged, included in ordinary
-analytics, exposed in Seller/Supplier DTOs, or treated as Store authority.
+is deferred. When a Checkout Session is created, Core generates a
+cryptographically secure, high-entropy random token and persists only its
+digest in `checkout_sessions.guest_order_access_token_digest`. The raw token is
+returned once through the authenticated Core → `storefront-api` response;
+`storefront-api` places and maintains it only inside the secure Storefront
+session/cookie boundary (Secure, HttpOnly, and an appropriate SameSite policy).
+Finalization copies the existing Session digest to
+`orders.guest_order_access_token_digest`; it never generates or rotates a
+capability. The raw token is never logged, included in ordinary analytics,
+event payloads, exposed in Seller/Supplier DTOs, placed in URLs or localStorage,
+or treated as Store authority.
 
 Every guest Order read or cancellation requires both:
 
 1. The trusted request Host resolves through `StoreResolver` to the Store.
 2. The presented capability verifies against the digest for that Order in the
    resolved Store.
+
+The Storefront actor layer must support multiple guest Orders simultaneously.
+Each Checkout Session/Order capability remains distinct through appropriately
+scoped or named HttpOnly cookies, or an equivalent secure server-side
+Storefront session mapping. One global cookie may not overwrite the only access
+path to a previous Order, and browser-readable localStorage is not an allowed
+capability store.
 
 An Order UUID, order number, browser-supplied `store_id`, or email alone never
 authorizes access. The public Order response never contains the raw capability
@@ -1010,13 +1110,13 @@ as a substitute for service authentication.
 
 ---
 
-## 25. Error Contract
+## 26. Error Contract
 
 Standardized HTTP error codes: `not_found` (404), `unauthorized` (401), `forbidden` (403), `invalid_argument` (400), `validation_error` (422), `market_mismatch` (422), `insufficient_inventory` (409), `price_changed` (409), `listing_unavailable` (409), `cart_expired` (409), `checkout_expired` (409), `idempotency_conflict` (409), `invalid_order_transition` (409), `conflict` (409), `internal_error` (500).
 
 ---
 
-## 26. Security & Privacy
+## 27. Security & Privacy
 
 - Bearer Cart Token Digest: Token held in HttpOnly cookie; SHA-256 stored in DB.
 - Tenant Isolation: DB composite UNIQUE keys and Store/Market composite FKs enforce Store boundary.
@@ -1026,23 +1126,25 @@ Standardized HTTP error codes: `not_found` (404), `unauthorized` (401), `forbidd
   are never logged or placed in ordinary analytics.
 - Guest Order authorization: Trusted Storefront Host resolution plus a valid
   dedicated Order capability are both mandatory for guest reads and
-  PENDING-only cancellation.
+  PENDING-only cancellation. The capability is pre-issued at Checkout Session
+  creation, copied by digest to the Order, and maintained per Order by the
+  Storefront actor layer; it is not a single global Order cookie.
 
 ---
 
-## 27. Database Migration Plan
+## 28. Database Migration Plan
 
 Phase 5 proposes migrations to `core`:
 - Migration A: `fulfillment_locations` ownership extension (support Seller-owned locations with Store/Market composite FK).
 - Migration B: `customers` & `customer_addresses` tables (with Store/Market composite FK).
 - Migration C: `carts` & `cart_items` tables (with Store/Market composite FK & NOT NULL price snapshot fields).
-- Migration D: `checkout_sessions` table (with `finalize_fingerprint`).
-- Migration E: `store_order_sequences`, `orders` (with Store/Market composite FK, `confirmation_deadline_at`, `UNIQUE (id, currency_code)`, and nullable `guest_order_access_token_digest`), `order_items` (with `FOREIGN KEY (order_id, currency_code) REFERENCES orders(id, currency_code) ON DELETE RESTRICT` and ON DELETE RESTRICT operational lineage), `order_addresses`, `order_timeline`, `order_notes`.
+- Migration D: `checkout_sessions` table (with `finalize_fingerprint` and required Phase 5 Guest Checkout `guest_order_access_token_digest`).
+- Migration E: `store_order_sequences`, `orders` (with Store/Market composite FK, `confirmation_deadline_at`, `UNIQUE (id, currency_code)`, and guest `guest_order_access_token_digest` copied from the Session), `order_items` (with `FOREIGN KEY (order_id, currency_code) REFERENCES orders(id, currency_code) ON DELETE RESTRICT` and ON DELETE RESTRICT operational lineage), `order_addresses`, `order_timeline`, `order_notes`.
 - Migration F: `outbox_events` claim extension columns & partial index.
 
 ---
 
-## 28. OpenAPI Ownership Plan
+## 29. OpenAPI Ownership Plan
 
 OpenAPI contracts are owned per-repository and validated against drift in CI:
 
@@ -1054,7 +1156,7 @@ P5.0 itself changes zero generated OpenAPI documents.
 
 ---
 
-## 29. Capability Rollout Gates
+## 30. Capability Rollout Gates
 
 Feature exposure is controlled at actor boundaries via capability-named environment flags:
 
@@ -1065,7 +1167,7 @@ Partially implemented functionality must not be exposed to traffic until the ent
 
 ---
 
-## 30. Observability
+## 31. Observability
 
 Operational metrics tracked:
 - `checkout_attempts_total` (counter) & `checkout_failures_total` (counter, labeled by reason)
@@ -1078,7 +1180,7 @@ Operational metrics tracked:
 
 ---
 
-## 31. Known Risk Matrix
+## 32. Known Risk Matrix
 
 | Risk | Mitigation |
 |---|---|
@@ -1095,7 +1197,7 @@ Operational metrics tracked:
 
 ---
 
-## 32. Phase 5 Definition of Done
+## 33. Phase 5 Definition of Done
 
 - [ ] Core database migrations complete & verified.
 - [ ] All database composite FK constraints (`store_id, market_code`) and index definitions verified.
@@ -1118,20 +1220,20 @@ Operational metrics tracked:
 
 ---
 
-## 33. Testing Strategy & Mandatory Test Matrix
+## 34. Testing Strategy & Mandatory Test Matrix
 
 Must include deterministic unit and integration tests (zero sleep-based concurrency tests):
 
-The mandatory matrix below contains 60 deterministic tests.
+The mandatory matrix below contains 85 deterministic tests.
 
-### 33.1 Concurrency & Stock Allocation Tests
+### 34.1 Concurrency & Stock Allocation Tests
 1. **Two available units under N checkouts:** N concurrent checkouts for a 2-unit stock → exactly 2 succeed.
 2. **Same SKU across multiple fulfillment locations:** Allocates from location with lowest `inventory_snapshot.id ASC` deterministically.
 3. **Multi-item in-tx rollback:** Item A succeeds, Item B stock fails → full rollback; zero surviving reservations.
 4. **Supplier Offer cross-location isolation:** Supplier Offer cannot allocate Seller-owned location or another Supplier's location.
 5. **Seller-owned listing isolation:** Seller-owned listing (supplier_offer_id IS NULL) cannot allocate Supplier location.
 
-### 33.2 Idempotency & Replay Tests
+### 34.2 Idempotency & Replay Tests
 6. **10 concurrent identical finalizes:** Exactly 1 Order created; all 10 return exact same Order.
 7. **HTTP response loss retry:** Client retries after network drop → returns same committed Order.
 8. **Fingerprint mismatch:** Same finalized session + different semantic fingerprint → `idempotency_conflict`.
@@ -1152,7 +1254,7 @@ The mandatory matrix below contains 60 deterministic tests.
 23. **Overflow rollback:** Any money overflow leaves zero Order, reservation, and Outbox rows.
 24. **Database currency relation:** PostgreSQL rejects an Order Item whose currency differs from its parent Order.
 
-### 33.3 Reservation & State Machine Race Tests
+### 34.3 Reservation & State Machine Race Tests
 25. **Confirm vs expiry race:** Concurrent Seller confirm + scheduler expiry → exactly one wins; no double inventory release.
 26. **Cancel vs expiry race:** Concurrent Customer cancel + scheduler expiry → exactly one wins.
 27. **Confirm vs cancel race:** Concurrent Seller confirm + Customer cancel → exactly one wins.
@@ -1161,7 +1263,7 @@ The mandatory matrix below contains 60 deterministic tests.
 30. **Seller confirm consumption:** Seller confirm transitions reservation `held → consumed` exactly once.
 31. **Seller cancel restock:** Seller cancel after confirmation restocks `on_hand_qty` exactly once.
 
-### 33.4 Historical Immutability Tests
+### 34.4 Historical Immutability Tests
 32. **Correct Store and token:** Correct resolved Store plus correct guest Order capability allows guest Order read.
 33. **Wrong Store Host:** Correct capability presented through a Host resolving to another Store is rejected.
 34. **Wrong guest token:** Correct Store plus wrong capability is rejected.
@@ -1180,7 +1282,7 @@ The mandatory matrix below contains 60 deterministic tests.
 47. **Supplier location code uniqueness:** Duplicate `(supplier_market_id, code)` is rejected.
 48. **Store location code uniqueness:** Duplicate Store-owned `(store_id, code)` is rejected while the same code remains valid for another Store.
 
-### 33.5 Outbox Publisher Lease Tests
+### 34.5 Outbox Publisher Lease Tests
 49. **Batch lease renewal:** Long-running publish batch renews lease before expiration using `remaining_lease` and the configured renewal margin.
 50. **Multi-publisher isolation:** Two worker instances claiming batch concurrently → zero overlapping events claimed.
 51. **Stale lease recovery:** Worker crash after claim → lease recovered after `OUTBOX_CLAIM_LEASE_DURATION`.
@@ -1190,17 +1292,44 @@ The mandatory matrix below contains 60 deterministic tests.
 55. **Consumer Inbox duplicate suppression:** Duplicate `event_id` delivery to same consumer → side-effect executes once.
 56. **Multi-consumer event delivery:** Same `event_id` delivered to two different consumer names → each processes once independently.
 
-### 33.6 Event Ordering Tests
+### 34.6 Event Ordering Tests
 57. **Order aggregate versions:** Order creation emits version `1`; each meaningful emitting mutation increments it transactionally.
 58. **Consumer-owned gap handling:** An ordering-dependent consumer ignores older versions and defers/retries or resyncs on a future version gap without advancing durable state.
 
-### 33.7 State Machine Matrix Tests
+### 34.7 State Machine Matrix Tests
 59. **All Phase 5 enabled transitions:** Table-driven test asserting success, timeline entry, and outbox event.
 60. **All Phase 5 rejected transitions:** Table-driven test asserting `invalid_order_transition` error and zero side-effects.
 
+### 34.8 Recovery, Deadline, Lease, and Fingerprint Closure Tests
+61. **Session capability before Order:** Checkout Session creation issues the raw capability before any Order exists.
+62. **Session stores digest only:** Checkout Session persistence contains only the capability digest; the raw capability is absent from DB state.
+63. **Digest copy:** Order finalization copies the exact Checkout Session capability digest.
+64. **Finalization response loss recovery:** Lost finalization response followed by retry returns the same Order, and the pre-issued capability still authorizes its read.
+65. **Finalized replay does not rotate capability:** Replaying a finalized Session does not generate or replace any capability.
+66. **Multiple Guest Orders:** Multiple guest Orders retain distinct capabilities and remain independently accessible.
+67. **Missing Session capability:** A Phase 5 guest Session without a capability digest cannot finalize a guest Order.
+68. **OPEN plus ACTIVE Cart:** An open Session with an active Cart is eligible to finalize.
+69. **FINALIZED plus CHECKED_OUT Cart:** A finalized Session with a checked-out Cart replays successfully.
+70. **Finalized Cart mismatch:** A finalized Session with a non-`checked_out` Cart returns an internal invariant failure and creates no new Order.
+71. **Confirm before deadline:** Confirmation one instant before the deadline is valid.
+72. **Confirm at deadline:** Confirmation exactly at the deadline is rejected.
+73. **Confirm after deadline before scheduler:** Late confirmation is rejected even when the expiry worker has not run.
+74. **Late confirm reservation safety:** Rejected late confirmation does not consume a reservation.
+75. **Late confirm inventory safety:** Rejected late confirmation does not change `on_hand_qty`.
+76. **Confirm versus expiry boundary:** Confirm and expiry at the deadline produce exactly one valid terminal outcome.
+77. **Reservation lock ordering:** Multi-reservation Order transitions lock reservations by `id ASC`.
+78. **Per-publish claim renewal:** Every RabbitMQ publish revalidates and renews the current claim immediately before network I/O.
+79. **Lost claim skips publish:** Publish is skipped when ownership revalidation affects zero rows.
+80. **Confirm timeout shorter than lease:** `RABBITMQ_PUBLISH_CONFIRM_TIMEOUT < OUTBOX_CLAIM_LEASE_DURATION` is enforced with an operational margin.
+81. **Ambiguous broker delivery:** Delivery after a publish-confirm timeout may duplicate, but Consumer Inbox applies the side effect once.
+82. **Same finalized semantic request:** Same address/contact replay yields the same fingerprint and Order.
+83. **Changed finalized semantic request:** Changed address/contact after finalization returns `idempotency_conflict`.
+84. **Finalized snapshot immutability:** Finalized retry never mutates the stored semantic address/contact snapshot.
+85. **Session creation response loss:** Lost Checkout Session creation response leaves no Order; creating another Checkout Session remains safe.
+
 ---
 
-## 34. Repository Impact Matrix
+## 35. Repository Impact Matrix
 
 | Repository | Impact | Description |
 |---|---|---|
@@ -1213,7 +1342,7 @@ The mandatory matrix below contains 60 deterministic tests.
 
 ---
 
-## 35. Implementation Unit Breakdown
+## 36. Implementation Unit Breakdown
 
 ### P5.0 — Phase Specification *(this document)*
 **Repository:** core · **Branch:** feature/p5-phase-spec
@@ -1224,27 +1353,27 @@ Backend work: Migrations A, B, C; Cart aggregate; Parent Cart row locking on all
 
 ### P5.2 — Checkout Session + Server-Computed Fingerprint
 **Repository:** core · **Dependencies:** P5.1 merged
-Backend work: Migration D; CheckoutSession aggregate (`open`, `finalized`, `expired`); Fingerprint computation logic; lock the session at the beginning of finalization, freeze `$transaction_now`, and enforce `expires_at > $transaction_now` independently of persisted cleanup status. Permit only finalized replay after expiry.
+Backend work: Migration D; CheckoutSession aggregate (`open`, `finalized`, `expired`); generate and return the guest capability at Session creation while persisting only its digest; explicit direct semantic-input finalization fingerprint contract; lock the session at the beginning of finalization, freeze `$transaction_now`, and enforce `expires_at > $transaction_now` independently of persisted cleanup status. Permit only finalized replay after expiry.
 
 ### P5.3 — Order Aggregate + Sequences + State Machine
 **Repository:** core · **Dependencies:** P5.2 merged (requires `checkout_sessions` table)
-Backend work: Migration E; `store_order_sequences`; Order aggregate with `confirmation_deadline_at`, `UNIQUE (id, currency_code)`, dedicated `guest_order_access_token_digest`, composite Order/Order Item currency FK, and operational lineage RESTRICT FKs; Order State Machine.
+Backend work: Migration E; `store_order_sequences`; Order aggregate with `confirmation_deadline_at`, `UNIQUE (id, currency_code)`, dedicated `guest_order_access_token_digest`, composite Order/Order Item currency FK, and operational lineage RESTRICT FKs; Order State Machine with the PENDING → CONFIRMED deadline precondition.
 
 ### P5.4 — Inventory Reservation Lifecycle + Allocation + Expiry
 **Repository:** core · **Dependencies:** P5.3 merged (requires `order_items` table)
-Backend work: Reservation state machine (`held`, `consumed`, `released`, `expired`); Movement `quantity_delta` rules; Two-stage expiry scheduler job based on `confirmation_deadline_at`.
+Backend work: Reservation state machine (`held`, `consumed`, `released`, `expired`); Movement `quantity_delta` rules; shared deterministic transition lock ordering; Seller confirmation deadline enforcement; reservations ordered by `id ASC`; two-stage expiry scheduler job based on `confirmation_deadline_at`.
 
 ### P5.5 — Atomic Single-Transaction Checkout
 **Repository:** core · **Dependencies:** P5.2 + P5.3 + P5.4 merged
-Backend work: Full single-transaction checkout implementation; Correct fingerprint ordering; Multi-item stock lock & reserve; checked signed-64-bit money multiplication/addition with `validation_error` rollback; atomic high-entropy guest capability generation and digest persistence; Idempotent replay handling (10 concurrent finalizes → 1 Order).
+Backend work: Full single-transaction checkout implementation; Correct fingerprint ordering; Multi-item stock lock & reserve; checked signed-64-bit money multiplication/addition with `validation_error` rollback; atomic copy of the pre-issued Checkout Session capability digest to the Order; no capability generation after finalization; Idempotent replay handling (10 concurrent finalizes → 1 Order).
 
 ### P5.6 — Outbox Multi-Publisher Claim & Delivery Reliability
 **Repository:** core · **Dependencies:** P5.5 merged
-Backend work: Migration F; Bounded claim loop with `FOR UPDATE SKIP LOCKED`, partial index, and per-event lease renewal; Publisher confirms & backoff logic; Domain event emission.
+Backend work: Migration F; Bounded claim loop with `FOR UPDATE SKIP LOCKED`, partial index, and per-event claim revalidation/renewal immediately before every publish; bounded `RABBITMQ_PUBLISH_CONFIRM_TIMEOUT` shorter than the claim lease; Publisher confirms & backoff logic; Domain event emission.
 
 ### P5.7 — Storefront API + Storefront Web Cart & Checkout
 **Repository:** seller (`apps/storefront-api`, `web/storefront`) · **Dependencies:** P5.6 merged (requires reliable transaction & event foundation)
-Backend & Frontend work: Storefront cart & checkout routes; Bearer cart cookie management; Next.js checkout UI; resolved-Host plus guest-capability Order read and PENDING-only cancellation routes. No UUID/order-number-only, browser-supplied Store, or email-only authorization.
+Backend & Frontend work: Storefront cart & checkout routes; secure pre-issued capability management supporting multiple independent Guest Orders; Bearer cart cookie management; Next.js checkout UI; resolved-Host plus guest-capability Order read and PENDING-only cancellation routes. No UUID/order-number-only, browser-supplied Store, email-only, or single-global-cookie authorization.
 
 ### P5.8 — Seller API + Seller Web Order Management
 **Repository:** seller (`apps/seller-api`, `web/seller`) · **Dependencies:** P5.6 merged (requires full Core order lifecycle, inventory, and outbox foundation)
@@ -1260,7 +1389,7 @@ Phase 5 completion report & final verification.
 
 ---
 
-## 36. Dependency Graph
+## 37. Dependency Graph
 
 ```
 P5.0 (merged)
@@ -1290,7 +1419,7 @@ P5.0 (merged)
 
 ---
 
-## 37. Self-Review: Architecture Assertions
+## 38. Self-Review: Architecture Assertions
 
 | Question | Answer | Enforcement |
 |---|---|---|
@@ -1299,10 +1428,14 @@ P5.0 (merged)
 | Is confirmation deadline frozen once at checkout? | **YES** | Computed `$deadline` ONCE in tx and stored on `orders.confirmation_deadline_at` & `inventory_reservations.expires_at`. |
 | Can an OPEN Checkout Session finalize after `expires_at`? | **NO** | Finalization locks the session, freezes `$transaction_now`, and requires `status = 'open' AND expires_at > $transaction_now`; cleanup is not authoritative. |
 | Can a finalized Checkout Session replay after `expires_at`? | **YES** | Fingerprint-matching replay returns the same existing Order only; it creates no new side effects. |
+| Can successful checkout commit make a Guest Order inaccessible because its only raw capability response was lost? | **NO** | The capability is issued at Checkout Session creation, before an Order exists; finalization copies its digest and replay preserves the already-held capability. |
+| Is the raw guest capability recoverable from Core DB? | **NO** | Core stores only a digest; recovery is unnecessary because the capability is possessed before Order creation. |
 | Can `line_total_minor` or `subtotal_minor` overflow `int64` silently? | **NO** | `checkedMultiply` and `checkedAdd` return `validation_error` and roll back before persistence. |
+| Can Seller confirm a PENDING Order after `confirmation_deadline_at` merely because the scheduler has not run? | **NO** | Seller confirmation requires `confirmation_deadline_at > $transaction_now` directly. |
+| Can Seller confirmation consume an expired reservation? | **NO** | Every linked reservation must be `held` with `expires_at > $transaction_now`. |
 | Is reservation expiry locking safe? | **YES** | Stage 1 reads candidate Order IDs; Stage 2 locks Order & snapshots in dedicated transaction. |
 | Can lease renewal run using elapsed time as if it were remaining time? | **NO** | `remaining_lease = publish_claimed_at + OUTBOX_CLAIM_LEASE_DURATION - now()`; elapsed age is `now() - publish_claimed_at`, and renewal uses `OUTBOX_CLAIM_RENEWAL_MARGIN`. |
-| Does outbox worker renew lease during long batches? | **YES** | Per-event renewal check before publish when `remaining_lease <= OUTBOX_CLAIM_RENEWAL_MARGIN`, with matching-claim and unexpired-lease predicates. |
+| Does outbox worker renew lease during long batches? | **YES** | Proactive renewal may use `OUTBOX_CLAIM_RENEWAL_MARGIN`, while mandatory ownership revalidation/renewal occurs before every publish with matching-claim and unexpired-lease predicates. |
 | Is operational source lineage preserved on Order Items? | **YES** | `supplier_offer_id`, `fulfillment_location_id`, `inventory_reservation_id` use `ON DELETE RESTRICT`. |
 | Can a crash during checkout leave Checkout Session stuck FINALIZING? | **NO** | Single PostgreSQL transaction; rollback leaves session OPEN; no persistent FINALIZING or FAILED state in DB. |
 | Can two publisher instances routinely claim/publish the same outbox row? | **NO** | Exclusive bounded lease via `publish_claim_id` set within `FOR UPDATE SKIP LOCKED`. |
@@ -1317,6 +1450,10 @@ P5.0 (merged)
 | Can a guest read/cancel an Order with only its UUID or order number? | **NO** | Guest operations require resolved Store Host plus the dedicated high-entropy Order capability. |
 | Can a guest securely cancel its own PENDING Order? | **YES** | A valid capability scoped to the resolved Store may perform the Customer-authorized PENDING → CANCELLED transition. |
 | Can a guest cancel CONFIRMED or later? | **NO** | The state machine returns `invalid_order_transition`; cancellation retry is idempotent only for an already-cancelled Order. |
+| Does finalized Checkout replay require a CHECKED_OUT Cart? | **YES** | The finalized Session/checked-out Cart pair is committed atomically; any other pair is an internal invariant failure. |
+| Do all Order transitions lock reservations in deterministic id order? | **YES** | Seller confirm, Seller cancel, Customer cancel, and expiry lock linked reservations `ORDER BY id ASC FOR UPDATE`. |
+| Can a publisher start network publish without current lease ownership? | **NO** | Every event is atomically revalidated and renewed immediately before publish; zero affected rows skips publish. |
+| Can a finalized retry change address/contact while returning the same Order? | **NO** | Canonical finalized semantic inputs are fingerprinted; changes return `idempotency_conflict` without mutation. |
 | Does `processed_events` claim to enforce aggregate ordering? | **NO** | It only suppresses duplicates by `(consumer_name, event_id)`. |
 | Can an ordering-dependent consumer detect aggregate version gaps? | **YES** | Consumer-owned durable last-applied version state detects gaps and applies retry/defer/resync policy. |
 | Can Checkout Session and Order FK references disagree? | **NO** | Single directional `orders.checkout_session_id` UNIQUE FK. |
