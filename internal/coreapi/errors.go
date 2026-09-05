@@ -34,6 +34,7 @@ const (
 	CodeUnavailable           = "unavailable"
 	CodeCheckoutExpired       = "checkout_expired"
 	CodeIdempotencyConflict   = "idempotency_conflict"
+	CodeInvalidOrderTransition = "invalid_order_transition"
 	CodeInternalError         = "internal_error"
 )
 
@@ -48,7 +49,7 @@ func statusFor(code string) int {
 		return http.StatusUnauthorized
 	case CodeForbidden:
 		return http.StatusForbidden
-	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict:
+	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict, CodeInvalidOrderTransition:
 		return http.StatusConflict
 	case CodeUnavailable, CodePreviewUnavailable:
 		return http.StatusServiceUnavailable
@@ -56,6 +57,7 @@ func statusFor(code string) int {
 		return http.StatusInternalServerError
 	}
 }
+
 
 // ErrorResponse is the internal error envelope. It intentionally reuses the
 // platform error shape so actor clients can decode it with the same struct they
@@ -90,7 +92,10 @@ func messageFor(code string) string {
 		return "checkout session expired"
 	case CodeIdempotencyConflict:
 		return "checkout request conflicts with the finalized session"
+	case CodeInvalidOrderTransition:
+		return "invalid order transition"
 	case CodeSchemaMismatch:
+
 		return "configuration does not match the theme schema"
 	case CodeUnsafeContent:
 		return "configuration contains prohibited executable content"
@@ -148,6 +153,8 @@ func codeFor(err error) string {
 		return CodeCheckoutExpired
 	case errors.Is(err, commerce.ErrIdempotencyConflict):
 		return CodeIdempotencyConflict
+	case errors.Is(err, commerce.ErrInvalidTransition):
+		return CodeInvalidOrderTransition
 	case errors.Is(err, commerce.ErrUnavailable):
 		return CodeUnavailable
 	case errors.Is(err, themes.ErrSchemaMismatch):
