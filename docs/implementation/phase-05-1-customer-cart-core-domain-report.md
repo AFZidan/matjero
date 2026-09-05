@@ -10,9 +10,9 @@
 ## Implemented scope
 
 - Migration `000010_customer_cart_domain` adds seller-owned fulfillment locations, customers, customer addresses, carts, and cart items. It preserves Supplier ownership, Market isolation, composite Store/Market and Customer/Store foreign keys, ownership checks, status/quantity/price constraints, and the required partial uniqueness rules.
-- Customer and Cart persistence lives in `modules/commerce/customer_cart.go`. Cart capabilities are generated with the existing cryptographic standard, only the digest is persisted, and the raw token is returned only at Cart creation.
+- Customer and Cart persistence lives in `pkg/commerce/customer_cart.go`. Cart capabilities are generated with the existing cryptographic standard, only the digest is persisted, and the raw token is returned only at Cart creation.
 - Cart Add, quantity update, and removal all lock the parent Cart row first with `FOR UPDATE`; checked-out carts are immutable. No merge operation is introduced in this slice.
-- `modules/catalog/selection.go` is the shared canonical Listing primitive. It selects the newest eligible Listing by `created_at DESC, id DESC` and is reused by Storefront catalog reads, Product/SKU availability, and Core Add-to-Cart resolution.
+- `pkg/catalog/selection.go` is the shared canonical Listing primitive. It selects the newest eligible Listing by `created_at DESC, id DESC` and is reused by Storefront catalog reads, Product/SKU availability, and Core Add-to-Cart resolution.
 - Public Add-to-Cart accepts only `sku_id` and `quantity` plus the Cart capability. Core resolves SKU → Variant → Product → canonical Listing and snapshots the authoritative retail amount and currency. Listing/source/store/price input is not authority.
 - Product and SKU availability is source-aware and uses the same canonical Listing: Supplier inventory is restricted to the Listing Supplier, seller-owned inventory to the Listing Store, active locations only, and explicit Supplier Offer unavailability is excluded. `inventory_snapshots` remain stock authority.
 - Internal Core contracts and generated OpenAPI cover Cart create/read/add/update/remove and seller-only Store-owned location creation. Safe Cart responses omit Listing, Supplier, Offer, and Fulfillment Location identity.

@@ -78,24 +78,24 @@ nothing is promoted "just in case".
 
 | Source | Destination | Consumers outside Core | Justification |
 | --- | --- | --- | --- |
-| `internal/commerce/` | `modules/commerce/` | admin, seller, supplier | Commerce domain + repository + service. All three actor HTTP surfaces are thin adapters over it. |
-| `internal/markets/` | `modules/markets/` | admin, seller, supplier, storefront | Market reference data; every actor `main.go` constructs `markets.NewService`. |
-| `internal/themes/` | `modules/themes/` | seller | Theme domain/persistence stays Core; Seller owns only the HTTP surface, which needs `themes.Service`. |
-| `internal/storefront/` | `modules/storefront/` | seller (storefront-api) | Trusted domain→store tenant resolution (ADR-010). Security-sensitive; must not be reimplemented per repo. |
-| `internal/actorapi/` | `modules/actorapi/` | admin, seller, supplier, storefront | Shared actor router: locale middleware, auth middleware, role gate, `/v1/bootstrap`, `/v1/markets`. |
-| `internal/api/` | `modules/api/` | admin, seller, supplier, storefront (indirectly) | `api.Bootstrap` is the bootstrap response contract, consumed by `actorapi` and by every actor's OpenAPI spec. |
-| `internal/openapi/spec.go` | `modules/openapi/spec.go` | admin, seller, supplier | Code-first OpenAPI document builder, validator, reflection-based schema generator. |
-| `internal/openapi/http.go` | `modules/openapi/http.go` | admin, seller, supplier, storefront | `/openapi.json` + `/docs` Swagger router. |
+| `internal/commerce/` | `pkg/commerce/` | admin, seller, supplier | Commerce domain + repository + service. All three actor HTTP surfaces are thin adapters over it. |
+| `internal/markets/` | `pkg/markets/` | admin, seller, supplier, storefront | Market reference data; every actor `main.go` constructs `markets.NewService`. |
+| `internal/themes/` | `pkg/themes/` | seller | Theme domain/persistence stays Core; Seller owns only the HTTP surface, which needs `themes.Service`. |
+| `internal/storefront/` | `pkg/storefront/` | seller (storefront-api) | Trusted domain→store tenant resolution (ADR-010). Security-sensitive; must not be reimplemented per repo. |
+| `internal/actorapi/` | `pkg/actorapi/` | admin, seller, supplier, storefront | Shared actor router: locale middleware, auth middleware, role gate, `/v1/bootstrap`, `/v1/markets`. |
+| `internal/api/` | `pkg/api/` | admin, seller, supplier, storefront (indirectly) | `api.Bootstrap` is the bootstrap response contract, consumed by `actorapi` and by every actor's OpenAPI spec. |
+| `internal/openapi/spec.go` | `pkg/openapi/spec.go` | admin, seller, supplier | Code-first OpenAPI document builder, validator, reflection-based schema generator. |
+| `internal/openapi/http.go` | `pkg/openapi/http.go` | admin, seller, supplier, storefront | `/openapi.json` + `/docs` Swagger router. |
 
 ### 3.1 New Core packages created by extraction (not moves)
 
 | New package | Extracted from | Exported surface | Consumers |
 | --- | --- | --- | --- |
-| `modules/actorhttp/` | unexported helpers in `internal/platformapi/router.go` | `Page`, `ParsePage`, `SubjectFrom`, `DecodeJSON`, `UpdateStatusHandler`, `WriteCommerceError`, `ResolveSupplierID`, `ResolveSellerID`, `TranslationInput` | admin, seller, supplier |
-| `modules/contracts/` | generic DTOs in `internal/platformapi/contracts.go` | `CollectionResponse[T]`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | admin, seller, supplier |
-| `modules/openapi/routes.go` | generic route/response helpers in `internal/openapi/specs.go` | `ActorRoutes(authenticated bool)`, `ListResponses[T]`, `AuthReadResponses`, `AuthCreatedResponses`, `AuthOKResponses`, `OKResponse`, `CreatedResponse`, `ErrorResponse`, `LimitParam`, `OffsetParam`, `PathStringParam`, `StringParam`, `CommonTags()` | admin, seller, supplier, storefront |
+| `pkg/actorhttp/` | unexported helpers in `internal/platformapi/router.go` | `Page`, `ParsePage`, `SubjectFrom`, `DecodeJSON`, `UpdateStatusHandler`, `WriteCommerceError`, `ResolveSupplierID`, `ResolveSellerID`, `TranslationInput` | admin, seller, supplier |
+| `pkg/contracts/` | generic DTOs in `internal/platformapi/contracts.go` | `CollectionResponse[T]`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | admin, seller, supplier |
+| `pkg/openapi/routes.go` | generic route/response helpers in `internal/openapi/specs.go` | `ActorRoutes(authenticated bool)`, `ListResponses[T]`, `AuthReadResponses`, `AuthCreatedResponses`, `AuthOKResponses`, `OKResponse`, `CreatedResponse`, `ErrorResponse`, `LimitParam`, `OffsetParam`, `PathStringParam`, `StringParam`, `CommonTags()` | admin, seller, supplier, storefront |
 
-**Rationale for `modules/actorhttp`:** `parsePage`, `subjectFrom`, `decodeJSON`,
+**Rationale for `pkg/actorhttp`:** `parsePage`, `subjectFrom`, `decodeJSON`,
 `updateStatusHandler`, `writeCommerceError`, `resolveSupplierID`, `resolveSellerID` and
 `translationInput` are today file-private helpers in `internal/platformapi/router.go`,
 used by admin, supplier, seller **and** theme handlers. Without promotion, each actor repo
@@ -175,7 +175,7 @@ importable by siblings once the module path changes.
 
 | Extracted symbols | Destination |
 | --- | --- |
-| `pageQuery`, `parsePage`, `subjectFrom`, `decodeJSON`, `updateStatusHandler`, `resolveSupplierID`, `resolveSellerID`, `writeCommerceError`, `translationInput` | Core `modules/actorhttp/actorhttp.go` (exported) |
+| `pageQuery`, `parsePage`, `subjectFrom`, `decodeJSON`, `updateStatusHandler`, `resolveSupplierID`, `resolveSellerID`, `writeCommerceError`, `translationInput` | Core `pkg/actorhttp/actorhttp.go` (exported) |
 | `Dependencies`, `RegisterAdminRoutes` (17 routes), `handleAdmin*` (17 handlers incl. `handleAdminOverview`) | `matjero-admin/internal/adminapi/router.go` |
 | `Dependencies`, `RegisterSupplierRoutes` (14 routes), `handleSupplier*` (14 handlers) | `matjero-supplier/internal/supplierapi/router.go` |
 | `Dependencies`, `RegisterSellerRoutes` (9 routes), `handleSeller*` (9 handlers) | `matjero-seller/internal/sellerapi/router.go` |
@@ -188,7 +188,7 @@ recorded in the duplicate-ownership audit as intentional.
 
 | DTOs | Destination |
 | --- | --- |
-| `CollectionResponse[T]`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | Core `modules/contracts/contracts.go` |
+| `CollectionResponse[T]`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | Core `pkg/contracts/contracts.go` |
 | `SupplierProfileResponse`, `SupplierProfileUpdateRequest`, `SupplierLocationCreateRequest`, `SupplierProductTranslationRequest`, `SupplierProductCreateRequest`, `SupplierProductCategoriesRequest`, `SupplierOfferCreateRequest`, `ProductCreateResponse`, `InventorySnapshotCreateRequest`, `InventoryAdjustmentRequest`, `InventoryAdjustmentResponse` | `matjero-supplier/internal/supplierapi/contracts.go` |
 | `SellerProfileResponse`, `SellerProfileUpdateRequest`, `SellerStoreCreateRequest`, `SellerListingImportRequest`, `SellerListingPriceRequest` | `matjero-seller/internal/sellerapi/contracts.go` |
 | (admin uses only the generic DTOs) | — |
@@ -198,13 +198,13 @@ recorded in the duplicate-ownership audit as intentional.
 Whole file → `matjero-seller/internal/sellerapi/themes.go`
 (`ThemeDependencies`, `themeServer`, `RegisterSellerThemeRoutes` (10 routes), `sellerID`,
 `writeThemeError`, 10 handlers, 9 theme DTOs). Its dependencies on `subjectFrom` /
-`decodeJSON` are re-pointed at `modules/actorhttp`.
+`decodeJSON` are re-pointed at `pkg/actorhttp`.
 
 ### 5.4 `internal/openapi/specs.go` (737 lines) → 5 destinations
 
 | Symbols | Destination |
 | --- | --- |
-| `actorRoutes`, `listResponses`, `authReadResponses`, `authCreatedResponses`, `authOKResponses`, `okResponse`, `createdResponse`, `errorResponse`, `limitParam`, `offsetParam`, `pathStringParam`, `stringParam`, `openAPITags` | Core `modules/openapi/routes.go` (exported) |
+| `actorRoutes`, `listResponses`, `authReadResponses`, `authCreatedResponses`, `authOKResponses`, `okResponse`, `createdResponse`, `errorResponse`, `limitParam`, `offsetParam`, `pathStringParam`, `stringParam`, `openAPITags` | Core `pkg/openapi/routes.go` (exported) |
 | `BuildAdminSpec`, `adminRoutes()` (18 routes) | `matjero-admin/internal/openapi/spec.go` |
 | `BuildSupplierSpec`, `supplierRoutes()` (14 routes) | `matjero-supplier/internal/openapi/spec.go` |
 | `BuildSellerSpec`, `sellerRoutes()` (19 routes: 9 commerce + 10 theme) | `matjero-seller/internal/openapi/seller_spec.go` |
@@ -217,7 +217,7 @@ currently passes; this behaviour is preserved rather than "fixed", per the no-re
 ### 5.5 `internal/openapi/types.go` (35 lines) — coupling seam, deleted
 
 35 type aliases from `openapi` → `platformapi`. Each alias is replaced by a direct
-reference in the repository that now owns the underlying DTO (Core `modules/contracts` for the
+reference in the repository that now owns the underlying DTO (Core `pkg/contracts` for the
 generic five; the actor's own `contracts.go` otherwise). The `openapi → platformapi`
 dependency edge disappears entirely.
 
@@ -225,7 +225,7 @@ dependency edge disappears entirely.
 
 | Test | Destination |
 | --- | --- |
-| `TestDocsRouterEnabledDisabled` (generic router behaviour) | Core `modules/openapi/http_test.go`, using a minimal locally built document instead of the admin spec |
+| `TestDocsRouterEnabledDisabled` (generic router behaviour) | Core `pkg/openapi/http_test.go`, using a minimal locally built document instead of the admin spec |
 | `TestBuildDocumentsValidate`, `TestBuildDocumentsDeterministic`, `TestSecuritySchemes`, `TestImportantRoutes` (admin slice), `containsTag` | `matjero-admin/internal/openapi/spec_test.go` |
 | same tests, supplier slice | `matjero-supplier/internal/openapi/spec_test.go` |
 | same tests, seller + storefront slices (incl. storefront "declares no security scheme" and `/v1/bootstrap` `Security == nil`) | `matjero-seller/internal/openapi/spec_test.go` |
@@ -263,7 +263,7 @@ containing only its own web apps:
 | --- | --- | --- |
 | 1 | Module path `matjero` → `github.com/matjeroapps/{core,admin,seller,supplier,…}` | Six independent modules cannot share one bare module path. |
 | 2 | Import rewrite `matjero/internal/X` → `github.com/matjeroapps/core/pkg/X` in siblings | Siblings cannot import Core `internal/`. |
-| 3 | **`modules/openapi/spec.go`: `schemaRefForType` hardcodes `t.PkgPath() == "matjero/packages/money"`** → must become `github.com/matjeroapps/core/packages/money` | Silent regression risk: an unchanged string makes the `Money` schema special-case fall through to struct reflection, changing every generated spec without any compile error. |
+| 3 | **`pkg/openapi/spec.go`: `schemaRefForType` hardcodes `t.PkgPath() == "matjero/packages/money"`** → must become `github.com/matjeroapps/core/packages/money` | Silent regression risk: an unchanged string makes the `Money` schema special-case fall through to struct reflection, changing every generated spec without any compile error. |
 | 4 | Workspace-root `go.work` (now `/var/www/personal/matjero/go.work`) for local multi-module development | Sibling folders are not yet published repos. Kept out of production config; no absolute local paths are baked into any `go.mod`. |
 | 5 | Each actor repo gets its own `scripts/check-locales.mjs` and its `web/*` `test` script path corrected | Today all four web `test` scripts invoke `node ../../scripts/check-locales.mjs`, reaching outside the workspace to the monorepo root — a path that does not exist after the split. |
 | 6 | `docker/web-app.Dockerfile` per repo: `COPY web/*/package.json` list reduced to that repo's workspaces | The current file copies all four web package.json files; three of them will not exist. |
@@ -302,9 +302,9 @@ All previously SHARED / REQUIRES_DECISION items are resolved:
 | `docker-compose.yml` | CORE — contains only shared infrastructure (postgres, redis, rabbitmq, zitadel); no app services. |
 | `web/storefront` | SELLER. |
 | Theme engine | domain/persistence CORE, HTTP surface SELLER. |
-| Shared actor HTTP helpers | CORE `modules/actorhttp`. |
-| Generic API DTOs | CORE `modules/contracts`. |
-| Generic OpenAPI helpers | CORE `modules/openapi`. |
+| Shared actor HTTP helpers | CORE `pkg/actorhttp`. |
+| Generic API DTOs | CORE `pkg/contracts`. |
+| Generic OpenAPI helpers | CORE `pkg/openapi`. |
 | `apps/integrations/*` | README-only ownership placeholders (both dirs are empty). |
 
 ---

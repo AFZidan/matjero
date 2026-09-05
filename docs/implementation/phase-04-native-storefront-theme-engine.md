@@ -12,7 +12,7 @@
 > not
 >
 > ```
-> storefront-api ──Go import──► github.com/matjeroapps/core/modules/storefront
+> storefront-api ──Go import──► github.com/matjeroapps/core/pkg/storefront
 > ```
 >
 > The P4.3 business implementation (eligible listings, price-source rules, tenant
@@ -561,8 +561,8 @@ Phase 4 is complete only when all completion criteria are met.
 - **Branch**: `feature/p4-public-catalog` (in both `matjeroapps/core` and `matjeroapps/seller`).
 - **Ownership after the multi-repository split**: Core owns the read model; Seller owns HTTP routing and the Storefront OpenAPI document.
 - **Backend Work (Core — `github.com/matjeroapps/core`)**:
-  - `modules/storefront/catalog.go`: public DTOs, `CatalogScope` (constructible only from a host-resolved `ResolvedStore`), validated locale, bounded `Page`, domain-neutral `ProductQuery` (keyword/category/price/availability/sort), sentinel errors `ErrCatalogNotFound` / `ErrInvalidQuery`.
-  - `modules/storefront/catalog_repository.go`: `CatalogRepository` store-scoped joined queries (bootstrap, category tree, category by slug, product listing with filters, product detail, search) — modeled on the `ListSupplierCatalog` JOIN LATERAL pattern; one shared `eligibleListings` CTE defines public eligibility for every read.
+  - `pkg/storefront/catalog.go`: public DTOs, `CatalogScope` (constructible only from a host-resolved `ResolvedStore`), validated locale, bounded `Page`, domain-neutral `ProductQuery` (keyword/category/price/availability/sort), sentinel errors `ErrCatalogNotFound` / `ErrInvalidQuery`.
+  - `pkg/storefront/catalog_repository.go`: `CatalogRepository` store-scoped joined queries (bootstrap, category tree, category by slug, product listing with filters, product detail, search) — modeled on the `ListSupplierCatalog` JOIN LATERAL pattern; one shared `eligibleListings` CTE defines public eligibility for every read.
   - Public DTOs are purpose-built customer-facing projections (no supplier IDs/contact/cost, no wholesale price, no platform fees, no internal fulfillment metadata, no inventory quantities). Public price is always the current Seller Listing price. Availability is derived read-only from SKU + active market fulfillment locations + inventory snapshots, with no reservation or inventory writes.
   - Bootstrap exposes published theme configuration only; draft configuration stays behind the P4.2 signed preview token.
 - **Backend Work (Seller — `github.com/matjeroapps/seller`)**:
@@ -581,11 +581,11 @@ Phase 4 is complete only when all completion criteria are met.
 - **Ownership after the multi-repository split**: Core owns the authoritative revision state and bumps it transactionally; Seller owns the Redis client, the cache keys, and the cache behaviour. Core holds no Redis dependency and Seller holds no revision truth.
 - **Backend Work (Core — `github.com/matjeroapps/core`)**:
   - Migration `000008_storefront_revisions.{up,down}.sql`: one `storefront_revisions` row per store (`store_id` PK/FK `ON DELETE CASCADE`, `revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1)`), backfilled for every existing store. A store with no row reads as revision 1, so a store created by an older path is never left without a generation.
-  - `modules/commerce/storefront_revision.go`: the store selectors for every storefront-affecting write and one atomic upsert bump (`INSERT ... ON CONFLICT DO UPDATE SET revision = revision + 1`). Bumps run on the transaction of the business write, so a rolled-back mutation never advances the revision and concurrent writes cannot lose a bump. New stores are initialized inside `createStoreInTx`.
+  - `pkg/commerce/storefront_revision.go`: the store selectors for every storefront-affecting write and one atomic upsert bump (`INSERT ... ON CONFLICT DO UPDATE SET revision = revision + 1`). Bumps run on the transaction of the business write, so a rolled-back mutation never advances the revision and concurrent writes cannot lose a bump. New stores are initialized inside `createStoreInTx`.
   - Bumped writes: store status/profile, seller listing create/price/status, product translation/status/slug/categories, variant and SKU creation, category translation/status/slug/reparent (the whole subtree, so a rename or moderation of an ancestor invalidates every store publishing a descendant), supplier offer status and availability, inventory snapshot creation, inventory adjustment, inventory reservation, fulfillment location status. Records shared between stores (one product or offer listed by several stores) bump every affected store.
   - Deliberately not bumped: supplier wholesale price (never public), theme draft edit/discard/preview, seller/supplier/supplier-market status, and creation of products or offers no store lists yet.
-  - `modules/themes/storefront_revision.go`: the Theme Engine's own bump, used by install/switch, deactivate, configuration create, version upgrade, and publish. Publishing is the only configuration write that advances the revision, because a draft is invisible to customers.
-  - `modules/storefront/revision.go`: `RevisionReader` resolves a trusted host through the existing `StoreResolver` to a revision. An unknown host, an inactive domain and an inactive store are indistinguishable and yield no revision, which is what stops a downstream cache from serving a store that stopped resolving publicly.
+  - `pkg/themes/storefront_revision.go`: the Theme Engine's own bump, used by install/switch, deactivate, configuration create, version upgrade, and publish. Publishing is the only configuration write that advances the revision, because a draft is invisible to customers.
+  - `pkg/storefront/revision.go`: `RevisionReader` resolves a trusted host through the existing `StoreResolver` to a revision. An unknown host, an inactive domain and an inactive store are indistinguishable and yield no revision, which is what stops a downstream cache from serving a store that stopped resolving publicly.
   - `internal/coreapi`: `GET /internal/v1/storefront/revision` (seller service caller only, tenant from `X-Matjero-Storefront-Host`, `{"revision": <n>}`), and every successful public storefront read is labelled `X-Matjero-Storefront-Revision`. The revision is read before the catalog query, so the label is a lower bound on the payload's freshness and the read/write race cannot cache older data under a newer generation.
 - **Backend Work (Seller — `github.com/matjeroapps/seller`)**:
   - Seller-owned Redis client and configuration; cache disabled by default and never required to start `storefront-api`.

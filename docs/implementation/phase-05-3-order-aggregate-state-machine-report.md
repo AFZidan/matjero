@@ -20,7 +20,7 @@ Phase 5.3 implements the Order Aggregate, Store Order Sequence Allocator, Order 
 ## 3. Core Architecture & Components
 
 ### 3.1 Store Order Sequence Allocator
-- **Location:** `modules/commerce/order_repository.go` (`AllocateOrderNumber`)
+- **Location:** `pkg/commerce/order_repository.go` (`AllocateOrderNumber`)
 - **Query:**
   ```sql
   INSERT INTO store_order_sequences (store_id, next_value)
@@ -32,7 +32,7 @@ Phase 5.3 implements the Order Aggregate, Store Order Sequence Allocator, Order 
 - **Semantics:** Monotonic per-Store integer starting at `100001`, formatted as `#100001`, `#100002`. The database row acts as the sole concurrency authority. Concurrency tests prove zero duplicates across simultaneous allocations and independent sequence counters per Store.
 
 ### 3.2 Order State Machine & Authority Rules
-- **Location:** `modules/commerce/orders.go` (`ValidateOrderTransition`)
+- **Location:** `pkg/commerce/orders.go` (`ValidateOrderTransition`)
 - **Enabled Phase 5 Transitions:**
   - `<creation> -> pending` (Authority: `checkout`)
   - `pending -> confirmed` (Authority: `seller`, Precondition: `decision_now < confirmation_deadline_at`)
@@ -51,13 +51,13 @@ Phase 5.3 implements the Order Aggregate, Store Order Sequence Allocator, Order 
 
 ## 4. Security & Privacy
 
-- Public DTO `ToPublic()` in `modules/commerce/orders.go` sanitizes output by excluding internal operational fields (`source_supplier_id`, `supplier_offer_id`, `supplier_cost_minor`, `supplier_cost_currency_code`, `fulfillment_location_id`, `inventory_reservation_id`, `guest_order_access_token_digest`).
+- Public DTO `ToPublic()` in `pkg/commerce/orders.go` sanitizes output by excluding internal operational fields (`source_supplier_id`, `supplier_offer_id`, `supplier_cost_minor`, `supplier_cost_currency_code`, `fulfillment_location_id`, `inventory_reservation_id`, `guest_order_access_token_digest`).
 - Tenant isolation is strictly enforced via DB composite UNIQUE keys and composite FKs (`store_id, market_code`, `customer_id, store_id`, `checkout_session_id, store_id`).
 
 ## 5. Verification Results
 
 - **Unit & Integration Tests:**
-  - `go test -v ./modules/commerce` -> PASS (All tests including sequence allocation concurrency, constraint validation, lineage restrictions, state machine matrix, and migration up/down checks passed).
+  - `go test -v ./pkg/commerce` -> PASS (All tests including sequence allocation concurrency, constraint validation, lineage restrictions, state machine matrix, and migration up/down checks passed).
   - `go test ./...` -> PASS across all packages in `matjeroapps/core`.
 - **Code Quality:**
   - `go vet ./...` -> PASS (exit code 0).

@@ -354,7 +354,7 @@ transaction, so a failure partway through left permanent debris:
   storefront eligibility, so the supplier would see a created offer that can
   never sell.
 
-The fix introduces [modules/commerce/supplier_composites.go](../../modules/commerce/supplier_composites.go):
+The fix introduces [pkg/commerce/supplier_composites.go](../../pkg/commerce/supplier_composites.go):
 
 ```go
 func (r Repository) CreateSupplierProductAtomically(ctx context.Context, supplierID string, draft ProductDraft) (Product, SupplierProduct, error)
@@ -428,7 +428,7 @@ refactor.
    id and `ListFulfillmentLocations` requires a supplier id. It is not a
    regression introduced by this refactor and was left unchanged.
 3. **Older non-atomic supplier composite methods remain in
-   `modules/commerce`.** They are no longer used by the internal API surface. They
+   `pkg/commerce`.** They are no longer used by the internal API surface. They
    were deliberately left in place rather than removed in a fix pull request, and
    should be retired in follow-up work.
 4. **No cross-repository contract test suite exists yet.** Core's OpenAPI

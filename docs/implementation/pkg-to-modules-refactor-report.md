@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Performed a pure structural rename of the Core domain directory `/pkg` to `/modules` in `matjeroapps/core`. All Go import paths, CI configuration, build scripts, and current architecture documentation were updated. No business logic, database migrations, or API contracts were modified. P5.5 and P5.6 have NOT been started.
+Performed a pure structural rename of the Core domain directory `/pkg` to `/modules` in `matjeroapps/core`. All Go import paths, CI configuration, build scripts, and current architecture documentation were updated. Historical reports and extraction manifests preserve their original `pkg/*` references to accurately document pre-refactor state. No business logic, database migrations, or API contracts were modified. P5.5 and P5.6 have NOT been started.
 
 ## Key Metadata
 
@@ -24,8 +24,8 @@ Performed a pure structural rename of the Core domain directory `/pkg` to `/modu
 - **Number of Go imports updated:** 43 files
 - **CI references updated:** `.github/workflows/ci.yml` (gofmt path `find apps cmd packages modules internal`)
 - **Scripts/build references updated:** All Dockerfiles (`go-app.Dockerfile`) build using path relative to root; verified with Docker builds
-- **Docs updated:** `README.md`, `docs/implementation/*.md`
-- **Historical pkg references intentionally retained:** Historical ADR and audit log notes describing the prior monorepo migration history
+- **Docs updated:** `README.md`, `docs/implementation/pkg-to-modules-refactor-report.md`
+- **Historical pkg references intentionally retained:** Historical ADRs, extraction manifests, and pre-refactor implementation reports
 - **Behavior changes:** NONE
 - **Migration changes:** NONE
 - **OpenAPI contract changes:** NONE (0 drift verified via `go run ./cmd/openapi-gen` and `git diff --exit-code -- docs/api`)
@@ -44,6 +44,14 @@ packages
 - `packages/`: Shared technical, platform, and infrastructure primitives (`database`, `events`, `outbox`, `money`, etc.).
 
 Verified zero dependency inversions (`packages/*` contains 0 imports from `modules/*`).
+
+## Documentation Path Migration Rule & Historical Preservation
+
+All documentation files across the repository were audited and updated according to the strict classification rule:
+- **Active / Current References:** Updated to `modules/*` where describing the present repository structure, architecture layout, active Go import paths, and current CI workflows (e.g. `README.md`, `.github/workflows/ci.yml`, and `pkg-to-modules-refactor-report.md`).
+- **Historical References:** Intentionally preserved as `pkg/*` where describing pre-refactor repository state, historical extraction manifests, commit-time file paths, past PR evidence logs, and historical git moves (e.g. `multi-repo-extraction-manifest.md`, `multi-repo-folder-split-report.md`, `repository-independence-inventory.md`, `repository-independence-report.md`, `phase-04-implementation-report.md`, `phase-05-*-report.md`).
+
+This historical preservation is deliberate and intentional to maintain accurate historical logs across pre-refactor reports.
 
 ## Verification Results
 
