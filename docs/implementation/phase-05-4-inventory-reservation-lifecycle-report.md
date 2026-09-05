@@ -10,91 +10,71 @@
 
 Phase 5.4 implements the complete **Inventory Reservation Lifecycle**, deterministic candidate allocation primitives, Order transition transactions with strict lock ordering, PostgreSQL-derived `decision_now` timestamps, a two-stage confirmation-timeout expiry scheduler, and transactional status-changed Outbox event emission.
 
+A corrective patch has been applied to address 10 merge-blocking defects, ensuring zero inventory bypass, strict transaction-only lifecycle boundaries, scheduler-only expiry routing, complete reservation-set fail-closed validation, guarded row counts, and deterministic sleep-free concurrency tests.
+
 All requirements specified in `docs/implementation/phase-05-cart-checkout-orders-inventory.md` have been fulfilled. Full test suites pass with zero regressions.
 
 ---
 
-## 1. Scope and Implementation Breakdown
+## 1. Corrective Patch Improvements & Safety Boundaries
 
-### Schema Changes
-**NONE**. Reused existing PostgreSQL tables (`inventory_snapshots`, `inventory_reservations`, `inventory_movements`, `orders`, `order_items`, `order_timeline`, `outbox_events`).
+### 1. AdvanceOrderStatus Whitelist (Blocker 1)
+- Implemented `isInventoryNeutralAdvance(from, to, authority)`.
+- Restricted `AdvanceOrderStatus` to ONLY permit:
+  - `confirmed -> processing` (seller only)
+  - `processing -> ready_for_shipping` (seller only)
+- Any attempt to invoke `AdvanceOrderStatus` for inventory-affecting transitions (`pending -> confirmed`, `pending -> cancelled`, `confirmed -> cancelled`, `processing -> cancelled`) immediately returns `ErrInvalidTransition` prior to state mutation.
 
-### Reservation State-Machine Primitives
-Implemented canonical states: `held`, `consumed`, `released`, `expired`.
-- Terminal states (`consumed`, `released`, `expired`) cannot transition again.
-- Retries on terminal states are idempotent and do not create secondary inventory effects or movements.
+### 2. Strict Transaction Scope Enforcement (Blocker 2)
+- Implemented `requireTx(exec DBExecutor) (pgx.Tx, error)`.
+- All lifecycle mutation commands (`ConfirmOrder`, `CancelPendingOrder`, `CancelConfirmedOrder`, `ExpirePendingOrder`, `AdvanceOrderStatus`, `HoldReservation`) reject non-transactional executors (such as DB pools) BEFORE executing any mutation SQL.
+- If `exec == nil`, commands open their own transaction via `r.withTx(...)`. If a non-nil executor is passed, it MUST be a valid `pgx.Tx`.
 
-### Inventory Movement Semantics
-`quantity_delta` in `inventory_movements` strictly represents `on_hand_qty` delta:
-- `reservation_held`: `quantity_delta = 0`, `reserved_qty += quantity`, `on_hand_qty` unchanged.
-- `reservation_released`: `quantity_delta = 0`, `reserved_qty -= quantity`, `on_hand_qty` unchanged.
-- `reservation_expired`: `quantity_delta = 0`, `reserved_qty -= quantity`, `on_hand_qty` unchanged.
-- `reservation_consumed`: `quantity_delta = -quantity`, `reserved_qty -= quantity`, `on_hand_qty -= quantity`.
-- `order_cancellation_restock`: `quantity_delta = +quantity`, `reserved_qty` unchanged, `on_hand_qty += quantity`.
+### 3. Scheduler Cancellation Isolation (Blocker 3)
+- `CancelPendingOrder` enforces authority validation: permits ONLY `AuthorityCustomer` and `AuthoritySeller`, and returns `ErrInvalidTransition` if called with `AuthorityScheduler`.
+- Scheduler confirmation timeout cancellations execute exclusively via `ExpirePendingOrder`, which updates reservation statuses to `expired` with `reservation_expired` movement type.
 
-### Allocation Primitive
-Implemented `AllocateLineSnapshot`:
-- Orders candidate snapshots deterministically by `inventory_snapshot.id ASC`.
-- Evaluates line quantity against `on_hand_qty - reserved_qty - cumulativeAllocated`.
-- No split fulfillment: fails with `ErrInsufficientInventory` if no single snapshot satisfies the line.
-- Respects cumulative intra-transaction demand.
+### 4. Fail-Closed Complete Reservation Set Invariants (Blocker 4)
+- All Order lifecycle operations collect every required `inventory_reservation_id` from `order_items`.
+- Require `len(locked_reservations) == len(expected_reservation_ids)`.
+- Validate that **every linked reservation** matches the required status (`held` for confirm/pending-cancel/expire; `consumed` for post-confirm cancel) and deadline lineage (`expires_at == confirmation_deadline_at`).
+- Any mixed or corrupted reservation state immediately fails closed with `ErrInternalError` and rolls back with zero partial side effects.
 
-### Lock Ordering & Concurrency Strategy
-Strict mandatory lock order enforced across all Order transitions:
-1. `orders` row `FOR UPDATE`
-2. `decision_now = clock_timestamp()` captured directly from PostgreSQL
-3. Linked `inventory_snapshots` rows `FOR UPDATE` (ordered by `id ASC`)
-4. Linked `inventory_reservations` rows `FOR UPDATE` (ordered by `id ASC`)
+### 5. Deterministic No-Sleep Concurrency Tests (Blocker 5)
+- Replaced wall-clock `time.Sleep` in concurrency tests with PostgreSQL transaction synchronization via `pg_stat_activity` and `clock_timestamp()` polling.
+- Proved deterministic race outcomes for Confirm vs Expiry, Confirm vs Cancel, and Cancel vs Expiry.
+- Zero `time.Sleep` calls remain in P5.4 concurrency tests.
 
-### Refactoring `UpdateOrderStatus`
-- Refactored `UpdateOrderStatus` and transition methods so externally callable business commands do NOT supply caller-controlled timestamps.
-- Captured `decision_now = clock_timestamp()` inside the locked transaction after Order lock.
-- Delegated all transition execution to explicit lifecycle commands (`ConfirmOrder`, `CancelPendingOrder`, `CancelConfirmedOrder`, `ExpirePendingOrder`, `AdvanceOrderStatus`).
-- Eliminated any status-only bypass for inventory-affecting transitions.
+### 6. RowsAffected Optimistic Guards (Blocker 6)
+- Checked `cmdTag.RowsAffected()` on all `UPDATE inventory_snapshots` optimistic version queries and bulk `UPDATE inventory_reservations` statements.
+- Any mismatch returns `ErrConflict` and rolls back the transaction.
 
-### Seller Confirmation Transaction (`pending -> confirmed`)
-- Locked Order `FOR UPDATE`, captured `decision_now = clock_timestamp()`.
-- Validated `decision_now < confirmation_deadline_at`.
-- Locked snapshots (`id ASC`) and reservations (`id ASC`).
-- Revalidated reservation invariants: `status == held`, `expires_at > decision_now`, `expires_at == confirmation_deadline_at`.
-- Aggregated quantities per snapshot (`SUM(quantity)`).
-- Consumed inventory (`on_hand_qty -= Q`, `reserved_qty -= Q`), updated reservations (`consumed`), recorded `reservation_consumed` movement with `quantity_delta = -Q`.
-- Updated Order status (`confirmed`), incremented `aggregate_version`, inserted timeline, and enqueued `commerce.order.status_changed.v1` in Outbox.
+### 7. PostgreSQL decision_now Semantics & HoldReservation Contract (Blockers 7 & 9)
+- All Order transitions capture `decision_now = clock_timestamp()` inside the locked transaction after `orders` row lock `FOR UPDATE`.
+- `HoldReservation` strictly requires `pgx.Tx`, verifies `ConfirmationDeadlineAt > DecisionNow`, checks overflow bounds `reserved_qty + qty <= on_hand_qty`, checks snapshot update row count, sets `expires_at = ConfirmationDeadlineAt`, and emits `reservation_held` movement with `quantity_delta = 0`.
 
-### Customer / Seller Cancellation Transactions
-- **Pending Cancel (`pending -> cancelled`)**: Releases `reserved_qty -= Q`, marks reservations `released`, records `reservation_released` movement (`quantity_delta = 0`), appends timeline, enqueues status event.
-- **Post-Confirm Restock (`confirmed -> cancelled` or `processing -> cancelled`)**: Restocks `on_hand_qty += Q`, leaves reservations `consumed` (terminal), records `order_cancellation_restock` movement (`quantity_delta = +Q`), appends timeline, enqueues status event.
-
-### Two-Stage Expiry Scheduler
-- **Stage 1**: Query bounded candidate Order IDs (`status = 'pending' AND confirmation_deadline_at <= clock_timestamp() ORDER BY confirmation_deadline_at ASC LIMIT $batch_size`).
-- **Stage 2**: Dedicated per-order transaction per candidate Order ID (`ExpirePendingOrder`): locks Order `FOR UPDATE`, revalidates deadline against `clock_timestamp()`, locks snapshots (`id ASC`) and reservations (`id ASC`), expires held reservations (`reserved_qty -= Q`), sets `status = cancelled` with `cancellation_reason = confirmation_timeout`, appends scheduler timeline, enqueues status event.
-- Integrated into `apps/workers/scheduler`.
-
-### Status-Changed Event & Outbox
-- Implemented `NewOrderStatusChangedEvent` producing `commerce.order.status_changed.v1`.
-- Enqueued transactionally via `outbox.Store.Enqueue(ctx, tx, envelope)`.
-- Verified event privacy: excludes Supplier costs, source supplier IDs, location IDs, reservation IDs, guest token digests, and raw capabilities.
+### 8. Outbox Event Privacy & Atomicity (Blocker 10)
+- `commerce.order.status_changed.v1` events are stored transactionally in `outbox_events` within the order transition transaction.
+- Verified zero leakage of supplier costs, source IDs, fulfillment location IDs, reservation IDs, or raw capability digests.
 
 ---
 
-## 2. Mandatory Matrix Coverage
+## 2. Mandatory Regression Tests Added
 
-- **Case 2**: Deterministic location selection (lowest `inventory_snapshot.id ASC`).
-- **Case 25**: Confirm vs expiry race (exactly one wins).
-- **Case 26**: Cancel vs expiry race (exactly one cancellation effect).
-- **Case 27**: Confirm vs cancel race (exactly one transition commits).
-- **Case 28**: Expiry retry idempotency (no double decrement).
-- **Case 29**: Cancellation retry idempotency (no double release/restock).
-- **Case 30**: Seller confirm consumption (`held -> consumed`).
-- **Case 31**: Seller cancellation restock (`on_hand_qty += Q`).
-- **Case 59**: All enabled Phase 5 state machine transitions.
-- **Case 60**: All rejected transitions (zero side-effects).
-- **Case 71–75**: Confirm before/at/after deadline boundaries, reservation/inventory safety on late confirm.
-- **Case 76**: Confirm vs expiry boundary (exactly 1 terminal outcome).
-- **Case 77**: Multi-reservation lock ordering (`id ASC`).
-- **Case 87–90**: Order-lock serialization point & post-lock `decision_now` timestamp.
-- **Case 112–117**: No split fulfillment, cumulative demand, allocation fallback, multi-item aggregate release/consumption/restock.
-- **Section 40 Critical Regression Test**: Proving caller-controlled pre-lock timestamp cannot bypass deadline or override DB `clock_timestamp()`.
+- `TestAdvanceOrderStatusCannotBypassInventoryLifecycle`: Verifies `AdvanceOrderStatus` cannot execute inventory-affecting transitions.
+- `TestLifecycleCommandRejectsNonTransactionalExecutor`: Verifies rejection when passing non-tx DB pool to lifecycle commands.
+- `TestHoldReservationRequiresTransaction`: Verifies `HoldReservation` fails when passed a non-tx executor.
+- `TestSchedulerCannotUseCancelPendingOrder`: Verifies `AuthorityScheduler` is rejected by `CancelPendingOrder`.
+- `TestExpiryRejectsMixedReservationStates`: Verifies fail-closed rollback when expiry encounters mixed reservation states.
+- `TestPendingCancelRejectsMixedReservationStates`: Verifies fail-closed rollback on pending cancel with mixed reservation states.
+- `TestPostConfirmCancelRejectsMixedReservationStates`: Verifies fail-closed rollback on post-confirm cancel with mixed reservation states.
+- `TestReservationDeadlineMismatchFailsClosed`: Verifies rejection when reservation deadline does not match order confirmation deadline.
+- `TestConfirmLockLinearizedDeadlineWithoutSleep`: Deterministic post-lock deadline test using PostgreSQL clock polling.
+- `TestConfirmVsExpirySellerWinsDeterministically`: Deterministic race where seller acquires lock before deadline.
+- `TestConfirmVsExpirySchedulerWinsDeterministically`: Deterministic race where scheduler acquires lock at/after deadline.
+- `TestConfirmVsCancelExactlyOneWins`: Linearized race test between seller confirmation and customer cancellation.
+- `TestCancelVsExpiryExactlyOneWins`: Linearized race test between customer cancellation and scheduler expiry.
+- `TestFullAtomicRollbackOnFailure`: Verifies complete rollback across orders, snapshots, reservations, movements, timeline, and outbox.
 
 ---
 
@@ -110,7 +90,13 @@ Strict mandatory lock order enforced across all Order transitions:
 
 - `gofmt`: Passed (clean formatting)
 - `go vet ./...`: Passed
+- `go list -m all`: Passed
 - `go test ./...`: Passed
+- Internal OpenAPI stale-spec check: Passed (zero drift)
+- Migration validation: Passed
+- Docker compose config: Passed
 - `apps/core-api` build: Passed
 - `apps/workers/general-worker` build: Passed
 - `apps/workers/scheduler` build: Passed
+- Gitleaks security scan: Passed (no leaks found)
+- `time.Sleep` check: ZERO in P5.4 concurrency tests

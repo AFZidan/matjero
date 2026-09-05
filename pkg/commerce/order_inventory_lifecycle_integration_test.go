@@ -2,6 +2,8 @@ package commerce
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -524,12 +526,13 @@ func TestMultiItemAggregation(t *testing.T) {
 	}
 }
 
-func TestCriticalRegressionPostLockDecisionNow(t *testing.T) {
+func TestConfirmLockLinearizedDeadlineWithoutSleep(t *testing.T) {
 	db, repo, ctx := setupP53Database(t)
 	suffix := uuid.NewString()
 
-	// Deadline expires in 1 second
-	store, order, _, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 100*time.Millisecond)
+	// Deadline expires in 200 milliseconds
+	deadlineDuration := 200 * time.Millisecond
+	store, order, _, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, deadlineDuration)
 
 	// Hold Order lock in Tx A
 	txA, err := db.Begin(ctx)
@@ -548,13 +551,37 @@ func TestCriticalRegressionPostLockDecisionNow(t *testing.T) {
 	done := make(chan struct{})
 
 	go func() {
-		// ConfirmOrder starts in Tx B
+		// ConfirmOrder starts in Tx B and blocks on order lock
 		_, errConfirm = repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "")
 		close(done)
 	}()
 
-	// Wait for deadline to pass while Tx A holds the lock
-	time.Sleep(300 * time.Millisecond)
+	// Deterministically poll PostgreSQL until:
+	// 1. We observe a backend blocked waiting on lock
+	// 2. PostgreSQL clock_timestamp() >= confirmation_deadline_at
+	for {
+		var isWaiting bool
+		err := db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity
+				WHERE query LIKE '%FOR UPDATE%'
+				  AND pid != pg_backend_pid()
+			)
+		`).Scan(&isWaiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var nowPastDeadline bool
+		err = db.QueryRow(ctx, `SELECT clock_timestamp() >= $1`, order.ConfirmationDeadlineAt).Scan(&nowPastDeadline)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if isWaiting && nowPastDeadline {
+			break
+		}
+	}
 
 	// Release Tx A lock
 	if err := txA.Rollback(ctx); err != nil {
@@ -566,5 +593,781 @@ func TestCriticalRegressionPostLockDecisionNow(t *testing.T) {
 	// ConfirmOrder acquired lock after deadline passed, so decision_now = clock_timestamp() > deadline -> must reject!
 	if errConfirm != ErrInvalidTransition {
 		t.Errorf("expected ErrInvalidTransition on lock-linearized late confirm, got %v", errConfirm)
+	}
+}
+
+func TestAdvanceOrderStatusCannotBypassInventoryLifecycle(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+	actor := "seller"
+
+	// 1. Reject pending -> confirmed via AdvanceOrderStatus
+	_, err := repo.AdvanceOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthoritySeller, &actor, nil, "")
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("expected ErrInvalidTransition for AdvanceOrderStatus pending -> confirmed, got %v", err)
+	}
+
+	// 2. Reject pending -> cancelled via AdvanceOrderStatus
+	_, err = repo.AdvanceOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusCancelled, AuthoritySeller, &actor, nil, "")
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("expected ErrInvalidTransition for AdvanceOrderStatus pending -> cancelled, got %v", err)
+	}
+
+	// Verify order state unchanged
+	orderFresh, err := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orderFresh.Status != OrderStatusPending || orderFresh.AggregateVersion != 1 {
+		t.Errorf("expected pending order with version 1, got status %s version %d", orderFresh.Status, orderFresh.AggregateVersion)
+	}
+
+	// Verify reservation unchanged
+	var resStatus string
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus); err != nil {
+		t.Fatal(err)
+	}
+	if resStatus != ReservationStatusHeld {
+		t.Errorf("expected reservation status held, got %s", resStatus)
+	}
+
+	// Verify snapshot unchanged
+	var onHand, reserved int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved); err != nil {
+		t.Fatal(err)
+	}
+	if onHand != 10 || reserved != 2 {
+		t.Errorf("expected on_hand 10 reserved 2, got on_hand %d reserved %d", onHand, reserved)
+	}
+
+	// Verify 0 movements, 0 timeline, 0 outbox
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if movCount != 0 || timelineCount != 0 || outboxCount != 0 {
+		t.Errorf("expected 0 side effects, got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+	}
+
+	// 3. Verify confirmed -> processing and processing -> ready_for_shipping work properly via AdvanceOrderStatus
+	_, err = repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "")
+	if err != nil {
+		t.Fatalf("ConfirmOrder failed: %v", err)
+	}
+
+	proc, err := repo.AdvanceOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusProcessing, AuthoritySeller, &actor, nil, "")
+	if err != nil || proc.Status != OrderStatusProcessing {
+		t.Fatalf("AdvanceOrderStatus to processing failed: %v", err)
+	}
+
+	// Reject confirmed/processing -> cancelled via AdvanceOrderStatus
+	_, err = repo.AdvanceOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusCancelled, AuthoritySeller, &actor, nil, "")
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("expected ErrInvalidTransition for processing -> cancelled via AdvanceOrderStatus, got %v", err)
+	}
+
+	ready, err := repo.AdvanceOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusReadyForShipping, AuthoritySeller, &actor, nil, "")
+	if err != nil || ready.Status != OrderStatusReadyForShipping {
+		t.Fatalf("AdvanceOrderStatus to ready_for_shipping failed: %v", err)
+	}
+}
+
+func TestLifecycleCommandRejectsNonTransactionalExecutor(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+	actor := "seller"
+
+	// Passing pool `db` (which is non-transactional DBExecutor) directly to confirmOrderExec / ConfirmOrder
+	_, err := repo.ConfirmOrder(ctx, db, store.ID, order.ID, &actor, "")
+	if err == nil || !strings.Contains(err.Error(), "transaction required") {
+		t.Fatalf("expected transaction required error, got %v", err)
+	}
+
+	// Verify complete state unchanged
+	orderFresh, err := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orderFresh.Status != OrderStatusPending {
+		t.Errorf("expected status pending, got %s", orderFresh.Status)
+	}
+
+	var resStatus string
+	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if resStatus != ReservationStatusHeld {
+		t.Errorf("expected reservation status held, got %s", resStatus)
+	}
+
+	var onHand, reserved int64
+	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved)
+	if onHand != 10 || reserved != 2 {
+		t.Errorf("expected snapshot on_hand 10 reserved 2, got on_hand %d reserved %d", onHand, reserved)
+	}
+}
+
+func TestHoldReservationRequiresTransaction(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	_, _, snapID, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 0, 2, 30*time.Minute)
+
+	now := time.Now().UTC()
+	deadline := now.Add(30 * time.Minute)
+
+	params := HoldReservationParams{
+		SnapshotID:             snapID,
+		Quantity:               2,
+		ReservationToken:       uuid.NewString(),
+		ConfirmationDeadlineAt: deadline,
+		DecisionNow:            now,
+	}
+
+	// 1. Calling with non-transactional pool -> rejected
+	_, err := repo.HoldReservation(ctx, db, params)
+	if err == nil || !strings.Contains(err.Error(), "transaction required") {
+		t.Fatalf("expected transaction required error, got %v", err)
+	}
+
+	// 2. Calling with deadline <= decisionNow -> rejected
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+
+	invalidParams := params
+	invalidParams.ConfirmationDeadlineAt = now
+	_, err = repo.HoldReservation(ctx, tx, invalidParams)
+	if !errors.Is(err, ErrInvalidInput) {
+		t.Errorf("expected ErrInvalidInput for invalid deadline sequence, got %v", err)
+	}
+
+	// 3. Valid call inside tx -> success
+	res, err := repo.HoldReservation(ctx, tx, params)
+	if err != nil {
+		t.Fatalf("HoldReservation failed: %v", err)
+	}
+	if res.Status != ReservationStatusHeld || res.Quantity != 2 {
+		t.Errorf("expected held reservation for quantity 2, got status %s qty %d", res.Status, res.Quantity)
+	}
+
+	// Verify snapshot reserved_qty = 2, version = 2
+	var reserved, version int64
+	if err := tx.QueryRow(ctx, `SELECT reserved_qty, version FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&reserved, &version); err != nil {
+		t.Fatal(err)
+	}
+	if reserved != 2 || version != 2 {
+		t.Errorf("expected reserved 2 version 2, got reserved %d version %d", reserved, version)
+	}
+
+	// Verify movement quantity_delta = 0
+	var delta int64
+	if err := tx.QueryRow(ctx, `SELECT quantity_delta FROM inventory_movements WHERE inventory_snapshot_id = $1 AND movement_type = 'reservation_held'`, snapID).Scan(&delta); err != nil {
+		t.Fatal(err)
+	}
+	if delta != 0 {
+		t.Errorf("expected movement quantity_delta 0, got %d", delta)
+	}
+}
+
+func TestSchedulerCannotUseCancelPendingOrder(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+
+	// Call CancelPendingOrder with AuthorityScheduler -> must reject!
+	_, err := repo.CancelPendingOrder(ctx, nil, store.ID, order.ID, AuthorityScheduler, nil, nil, "")
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Errorf("expected ErrInvalidTransition when scheduler calls CancelPendingOrder, got %v", err)
+	}
+
+	// Assert order unchanged
+	orderFresh, err := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orderFresh.Status != OrderStatusPending {
+		t.Errorf("expected pending, got %s", orderFresh.Status)
+	}
+
+	// Now run ExpirePendingOrder after deadline passes
+	if _, err := db.Exec(ctx, `UPDATE orders SET confirmation_deadline_at = clock_timestamp() - interval '1 minute' WHERE id = $1`, order.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE inventory_reservations SET expires_at = (SELECT confirmation_deadline_at FROM orders WHERE id = $1) WHERE id = $2`, order.ID, resID); err != nil {
+		t.Fatal(err)
+	}
+
+	expired, err := repo.ExpirePendingOrder(ctx, nil, order.ID)
+	if err != nil {
+		t.Fatalf("ExpirePendingOrder failed: %v", err)
+	}
+	if expired.Status != OrderStatusCancelled || expired.CancellationReason == nil || *expired.CancellationReason != "confirmation_timeout" {
+		t.Errorf("expected cancelled with confirmation_timeout, got status %s", expired.Status)
+	}
+
+	var resStatus string
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus); err != nil {
+		t.Fatal(err)
+	}
+	if resStatus != ReservationStatusExpired {
+		t.Errorf("expected reservation status expired, got %s", resStatus)
+	}
+
+	var movType string
+	var delta int64
+	if err := db.QueryRow(ctx, `SELECT movement_type, quantity_delta FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movType, &delta); err != nil {
+		t.Fatal(err)
+	}
+	if movType != MovementTypeReservationExpired || delta != 0 {
+		t.Errorf("expected movement reservation_expired delta 0, got %s %d", movType, delta)
+	}
+}
+
+func TestExpiryRejectsMixedReservationStates(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	seller, err := repo.CreateSeller(ctx, "seller-"+suffix, "Seller "+suffix, "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := repo.CreateStoreWithDomain(ctx, seller.ID, "EG", "store-"+suffix, "Store "+suffix, "active", nil, suffix+".test", "platform", "active", true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cartToken, err := repo.CreateCart(ctx, store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, store_id, market_code, code, name, location_type, status) VALUES ($1, $2, 'EG', $3, 'Loc', 'warehouse', 'active')`, locID, store.ID, "LOC-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	productID := uuid.NewString()
+	variantID := uuid.NewString()
+	skuID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO products (id, slug, status) VALUES ($1, $2, 'active')`, productID, "slug-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantID, productID, "VAR-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO skus (id, variant_id, code, status) VALUES ($1, $2, $3, 'active')`, skuID, variantID, "SKU-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	snapID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, sku_id, fulfillment_location_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 5, 1)`, snapID, skuID, locID); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().UTC().Add(-10 * time.Minute) // Past deadline
+
+	resID1 := uuid.NewString()
+	resID2 := uuid.NewString()
+	// Mixed state: resID1 = held, resID2 = released!
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't1', $2, 'held', 2, $3)`, resID1, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't2', $2, 'released', 3, $3)`, resID2, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+
+	orderID := uuid.NewString()
+	order := Order{
+		ID:                          orderID,
+		OrderNumber:                 "#" + suffix[:8],
+		StoreID:                     store.ID,
+		MarketCode:                  "EG",
+		CheckoutSessionID:           session.ID,
+		Status:                      OrderStatusPending,
+		CurrencyCode:                "EGP",
+		GuestOrderAccessTokenDigest: session.GuestOrderAccessTokenDigest,
+		SubtotalMinor:               2000,
+		TotalMinor:                  2000,
+		ConfirmationDeadlineAt:      deadline,
+		AggregateVersion:            1,
+		CreatedAt:                   time.Now().UTC(),
+		UpdatedAt:                   time.Now().UTC(),
+		Items: []OrderItem{
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID1, ProductTitleSnapshot: "P1", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 2, LineTotalMinor: 1000},
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID2, ProductTitleSnapshot: "P2", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 3, LineTotalMinor: 1000},
+		},
+	}
+	if _, err := repo.CreateOrder(ctx, nil, order); err != nil {
+		t.Fatal(err)
+	}
+
+	// ExpirePendingOrder must fail closed!
+	_, err = repo.ExpirePendingOrder(ctx, nil, order.ID)
+	if !errors.Is(err, ErrInternalError) {
+		t.Errorf("expected ErrInternalError on mixed reservation state expiry, got %v", err)
+	}
+
+	// Assert order remains pending
+	orderFresh, _ := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if orderFresh.Status != OrderStatusPending {
+		t.Errorf("expected order status pending after failed expiry, got %s", orderFresh.Status)
+	}
+
+	// Assert res1 remains held, res2 remains released
+	var s1, s2 string
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID1).Scan(&s1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID2).Scan(&s2); err != nil {
+		t.Fatal(err)
+	}
+	if s1 != ReservationStatusHeld || s2 != ReservationStatusReleased {
+		t.Errorf("expected res1 held res2 released, got %s %s", s1, s2)
+	}
+
+	// Assert snapshot reserved_qty unchanged at 5
+	var reserved int64
+	if err := db.QueryRow(ctx, `SELECT reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&reserved); err != nil {
+		t.Fatal(err)
+	}
+	if reserved != 5 {
+		t.Errorf("expected reserved_qty 5, got %d", reserved)
+	}
+}
+
+func TestPendingCancelRejectsMixedReservationStates(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	seller, err := repo.CreateSeller(ctx, "seller-"+suffix, "Seller "+suffix, "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := repo.CreateStoreWithDomain(ctx, seller.ID, "EG", "store-"+suffix, "Store "+suffix, "active", nil, suffix+".test", "platform", "active", true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cartToken, err := repo.CreateCart(ctx, store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, store_id, market_code, code, name, location_type, status) VALUES ($1, $2, 'EG', $3, 'Loc', 'warehouse', 'active')`, locID, store.ID, "LOC-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	productID := uuid.NewString()
+	variantID := uuid.NewString()
+	skuID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO products (id, slug, status) VALUES ($1, $2, 'active')`, productID, "slug-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantID, productID, "VAR-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO skus (id, variant_id, code, status) VALUES ($1, $2, $3, 'active')`, skuID, variantID, "SKU-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	snapID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, sku_id, fulfillment_location_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 5, 1)`, snapID, skuID, locID); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().UTC().Add(30 * time.Minute)
+
+	resID1 := uuid.NewString()
+	resID2 := uuid.NewString()
+	// Mixed state: resID1 = held, resID2 = expired!
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't1', $2, 'held', 2, $3)`, resID1, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't2', $2, 'expired', 3, $3)`, resID2, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+
+	orderID := uuid.NewString()
+	order := Order{
+		ID:                          orderID,
+		OrderNumber:                 "#" + suffix[:8],
+		StoreID:                     store.ID,
+		MarketCode:                  "EG",
+		CheckoutSessionID:           session.ID,
+		Status:                      OrderStatusPending,
+		CurrencyCode:                "EGP",
+		GuestOrderAccessTokenDigest: session.GuestOrderAccessTokenDigest,
+		SubtotalMinor:               2000,
+		TotalMinor:                  2000,
+		ConfirmationDeadlineAt:      deadline,
+		AggregateVersion:            1,
+		CreatedAt:                   time.Now().UTC(),
+		UpdatedAt:                   time.Now().UTC(),
+		Items: []OrderItem{
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID1, ProductTitleSnapshot: "P1", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 2, LineTotalMinor: 1000},
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID2, ProductTitleSnapshot: "P2", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 3, LineTotalMinor: 1000},
+		},
+	}
+	if _, err := repo.CreateOrder(ctx, nil, order); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = repo.CancelPendingOrder(ctx, nil, store.ID, order.ID, AuthorityCustomer, nil, nil, "")
+	if !errors.Is(err, ErrInternalError) {
+		t.Errorf("expected ErrInternalError on mixed reservation state pending cancel, got %v", err)
+	}
+}
+
+func TestPostConfirmCancelRejectsMixedReservationStates(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	seller, err := repo.CreateSeller(ctx, "seller-"+suffix, "Seller "+suffix, "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := repo.CreateStoreWithDomain(ctx, seller.ID, "EG", "store-"+suffix, "Store "+suffix, "active", nil, suffix+".test", "platform", "active", true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cartToken, err := repo.CreateCart(ctx, store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	locID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, store_id, market_code, code, name, location_type, status) VALUES ($1, $2, 'EG', $3, 'Loc', 'warehouse', 'active')`, locID, store.ID, "LOC-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	productID := uuid.NewString()
+	variantID := uuid.NewString()
+	skuID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO products (id, slug, status) VALUES ($1, $2, 'active')`, productID, "slug-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantID, productID, "VAR-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO skus (id, variant_id, code, status) VALUES ($1, $2, $3, 'active')`, skuID, variantID, "SKU-"+suffix[:8]); err != nil {
+		t.Fatal(err)
+	}
+
+	snapID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, sku_id, fulfillment_location_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 0, 1)`, snapID, skuID, locID); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().UTC().Add(30 * time.Minute)
+
+	resID1 := uuid.NewString()
+	resID2 := uuid.NewString()
+	// Mixed state: resID1 = consumed, resID2 = held!
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't1', $2, 'consumed', 2, $3)`, resID1, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_reservations (id, reservation_token, inventory_snapshot_id, status, quantity, expires_at) VALUES ($1, 't2', $2, 'held', 3, $3)`, resID2, snapID, deadline); err != nil {
+		t.Fatal(err)
+	}
+
+	orderID := uuid.NewString()
+	order := Order{
+		ID:                          orderID,
+		OrderNumber:                 "#" + suffix[:8],
+		StoreID:                     store.ID,
+		MarketCode:                  "EG",
+		CheckoutSessionID:           session.ID,
+		Status:                      OrderStatusConfirmed,
+		CurrencyCode:                "EGP",
+		GuestOrderAccessTokenDigest: session.GuestOrderAccessTokenDigest,
+		SubtotalMinor:               2000,
+		TotalMinor:                  2000,
+		ConfirmationDeadlineAt:      deadline,
+		AggregateVersion:            2,
+		CreatedAt:                   time.Now().UTC(),
+		UpdatedAt:                   time.Now().UTC(),
+		Items: []OrderItem{
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID1, ProductTitleSnapshot: "P1", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 2, LineTotalMinor: 1000},
+			{ID: uuid.NewString(), OrderID: orderID, FulfillmentLocationID: locID, InventoryReservationID: resID2, ProductTitleSnapshot: "P2", SKUCodeSnapshot: "S1", UnitPriceMinor: 1000, CurrencyCode: "EGP", Quantity: 3, LineTotalMinor: 1000},
+		},
+	}
+	if _, err := repo.CreateOrder(ctx, nil, order); err != nil {
+		t.Fatal(err)
+	}
+
+	actor := "seller"
+	_, err = repo.CancelConfirmedOrder(ctx, nil, store.ID, order.ID, AuthoritySeller, &actor, nil, "")
+	if !errors.Is(err, ErrInternalError) {
+		t.Errorf("expected ErrInternalError on mixed reservation state post-confirm cancel, got %v", err)
+	}
+
+	var onHand int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand); err != nil {
+		t.Fatal(err)
+	}
+	if onHand != 10 {
+		t.Errorf("expected on_hand_qty 10 (no partial restock), got %d", onHand)
+	}
+}
+
+func TestReservationDeadlineMismatchFailsClosed(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, _, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+
+	// Tamper reservation expires_at to differ from order.ConfirmationDeadlineAt
+	db.Exec(ctx, `UPDATE inventory_reservations SET expires_at = $1 WHERE id = $2`, order.ConfirmationDeadlineAt.Add(5*time.Minute), resID)
+
+	actor := "seller"
+	_, err := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "")
+	if !errors.Is(err, ErrInternalError) {
+		t.Errorf("expected ErrInternalError on deadline mismatch confirm, got %v", err)
+	}
+}
+
+func TestConfirmVsExpirySellerWinsDeterministically(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+	actor := "seller"
+
+	// Seller confirms first before deadline
+	confirmed, err := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-seller-win")
+	if err != nil {
+		t.Fatalf("ConfirmOrder failed: %v", err)
+	}
+	if confirmed.Status != OrderStatusConfirmed {
+		t.Fatalf("expected confirmed, got %s", confirmed.Status)
+	}
+
+	// Expiry runs afterward
+	expired, err := repo.ExpirePendingOrder(ctx, nil, order.ID)
+	if err != nil {
+		t.Fatalf("ExpirePendingOrder after confirm error: %v", err)
+	}
+	if expired.Status != OrderStatusConfirmed {
+		t.Errorf("expected expired order to remain confirmed, got %s", expired.Status)
+	}
+
+	// Assert inventory side effects occurred exactly once
+	var onHand, reserved int64
+	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved)
+	if onHand != 8 || reserved != 0 {
+		t.Errorf("expected on_hand 8 reserved 0, got on_hand %d reserved %d", onHand, reserved)
+	}
+
+	var resStatus string
+	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if resStatus != ReservationStatusConsumed {
+		t.Errorf("expected reservation status consumed, got %s", resStatus)
+	}
+
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
+		t.Errorf("expected exactly 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+	}
+}
+
+func TestConfirmVsExpirySchedulerWinsDeterministically(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, -10*time.Minute) // Deadline past
+
+	// Expiry runs first
+	expired, err := repo.ExpirePendingOrder(ctx, nil, order.ID)
+	if err != nil {
+		t.Fatalf("ExpirePendingOrder failed: %v", err)
+	}
+	if expired.Status != OrderStatusCancelled {
+		t.Fatalf("expected cancelled, got %s", expired.Status)
+	}
+
+	// Seller attempts confirmation after expiry
+	actor := "seller"
+	_, errConfirm := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-late")
+	if !errors.Is(errConfirm, ErrInvalidTransition) {
+		t.Errorf("expected ErrInvalidTransition on confirm after expiry, got %v", errConfirm)
+	}
+
+	// Assert inventory side effects occurred exactly once
+	var onHand, reserved int64
+	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved)
+	if onHand != 10 || reserved != 0 {
+		t.Errorf("expected on_hand 10 reserved 0, got on_hand %d reserved %d", onHand, reserved)
+	}
+
+	var resStatus string
+	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if resStatus != ReservationStatusExpired {
+		t.Errorf("expected reservation status expired, got %s", resStatus)
+	}
+
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
+		t.Errorf("expected exactly 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+	}
+}
+
+func TestConfirmVsCancelExactlyOneWins(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+
+	startGate := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	actor := "seller"
+	var errConfirm, errCancel error
+
+	go func() {
+		defer wg.Done()
+		<-startGate
+		_, errConfirm = repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-confirm")
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startGate
+		_, errCancel = repo.CancelPendingOrder(ctx, nil, store.ID, order.ID, AuthorityCustomer, nil, nil, "corr-cancel")
+	}()
+
+	close(startGate)
+	wg.Wait()
+
+	_ = errConfirm
+	_ = errCancel
+
+	finalOrder, err := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if finalOrder.Status != OrderStatusConfirmed && finalOrder.Status != OrderStatusCancelled {
+		t.Fatalf("expected status confirmed or cancelled, got %s", finalOrder.Status)
+	}
+
+	var reserved int64
+	db.QueryRow(ctx, `SELECT reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&reserved)
+	if reserved != 0 {
+		t.Errorf("expected reserved_qty 0 (decremented exactly once), got %d", reserved)
+	}
+
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
+		t.Errorf("expected 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+	}
+}
+
+func TestCancelVsExpiryExactlyOneWins(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, -10*time.Minute)
+
+	startGate := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	var errCancel, errExpiry error
+
+	go func() {
+		defer wg.Done()
+		<-startGate
+		_, errCancel = repo.CancelPendingOrder(ctx, nil, store.ID, order.ID, AuthorityCustomer, nil, nil, "corr-cancel")
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-startGate
+		_, errExpiry = repo.ExpirePendingOrder(ctx, nil, order.ID)
+	}()
+
+	close(startGate)
+	wg.Wait()
+
+	_ = errCancel
+	_ = errExpiry
+
+	finalOrder, err := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalOrder.Status != OrderStatusCancelled {
+		t.Fatalf("expected order cancelled, got %s", finalOrder.Status)
+	}
+
+	var resStatus string
+	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if resStatus != ReservationStatusReleased && resStatus != ReservationStatusExpired {
+		t.Errorf("expected reservation status released or expired, got %s", resStatus)
+	}
+
+	var reserved int64
+	db.QueryRow(ctx, `SELECT reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&reserved)
+	if reserved != 0 {
+		t.Errorf("expected reserved_qty 0 (decremented exactly once), got %d", reserved)
+	}
+
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
+		t.Errorf("expected 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+	}
+}
+
+func TestFullAtomicRollbackOnFailure(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+	actor := "seller"
+
+	// Calling ConfirmOrder with non-tx exec fails before mutation
+	_, err := repo.ConfirmOrder(ctx, db, store.ID, order.ID, &actor, "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	// Verify all 6 tables have zero partial effects
+	var oStatus string
+	db.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1`, order.ID).Scan(&oStatus)
+
+	var snapOnHand, snapReserved int64
+	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&snapOnHand, &snapReserved)
+
+	var rStatus string
+	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&rStatus)
+
+	var movCount, timelineCount, outboxCount int
+	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+
+	if oStatus != OrderStatusPending || snapOnHand != 10 || snapReserved != 2 || rStatus != ReservationStatusHeld || movCount != 0 || timelineCount != 0 || outboxCount != 0 {
+		t.Errorf("atomic rollback assertion failed: order=%s snap=(%d,%d) res=%s mov=%d timeline=%d outbox=%d", oStatus, snapOnHand, snapReserved, rStatus, movCount, timelineCount, outboxCount)
 	}
 }

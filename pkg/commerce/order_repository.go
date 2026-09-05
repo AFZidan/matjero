@@ -417,6 +417,30 @@ func lockReservationsByIDs(ctx context.Context, exec DBExecutor, reservationIDs 
 	return reservations, nil
 }
 
+func requireTx(exec DBExecutor) (pgx.Tx, error) {
+	if exec == nil {
+		return nil, fmt.Errorf("transaction required: exec is nil")
+	}
+	tx, ok := exec.(pgx.Tx)
+	if !ok || tx == nil {
+		return nil, fmt.Errorf("transaction required: exec is not pgx.Tx")
+	}
+	return tx, nil
+}
+
+func isInventoryNeutralAdvance(from, to string, authority TransitionAuthority) bool {
+	if authority != AuthoritySeller {
+		return false
+	}
+	if from == OrderStatusConfirmed && to == OrderStatusProcessing {
+		return true
+	}
+	if from == OrderStatusProcessing && to == OrderStatusReadyForShipping {
+		return true
+	}
+	return false
+}
+
 func enqueueStatusChangedEvent(ctx context.Context, exec DBExecutor, order Order, fromStatus, correlationID, causationID string, decisionNow time.Time) error {
 	tx, ok := exec.(pgx.Tx)
 	if !ok {
@@ -443,7 +467,11 @@ func (r Repository) ConfirmOrder(ctx context.Context, exec DBExecutor, storeID, 
 		})
 		return res, err
 	}
-	return r.confirmOrderExec(ctx, exec, storeID, orderID, actorSubject, correlationID)
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.confirmOrderExec(ctx, tx, storeID, orderID, actorSubject, correlationID)
 }
 
 func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, actorSubject *string, correlationID string) (Order, error) {
@@ -547,10 +575,10 @@ func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID
 		return Order{}, err
 	}
 	if len(reservations) != len(resIDs) {
-		return Order{}, ErrInvalidInput
+		return Order{}, ErrInternalError
 	}
 
-	// 5. Revalidate Reservation Invariants
+	// 5. Revalidate Reservation Invariants - Fail Closed if any mismatch occurs
 	for _, res := range reservations {
 		if res.Status != ReservationStatusHeld {
 			return Order{}, ErrInvalidTransition
@@ -579,13 +607,16 @@ func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID
 		}
 
 		newVersion := snap.Version + 1
-		_, err := db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_snapshots
 			SET on_hand_qty = $1, reserved_qty = $2, version = $3, updated_at = $4
 			WHERE id = $5 AND version = $6
 		`, newOnHand, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
 		if err != nil {
 			return Order{}, translatePGError(err, "update snapshot for confirm")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
 		}
 
 		movID := uuid.NewString()
@@ -599,13 +630,16 @@ func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID
 	}
 
 	// 8. Mark reservations consumed
-	_, err = db.Exec(ctx, `
+	cmdTag, err := db.Exec(ctx, `
 		UPDATE inventory_reservations
 		SET status = $1, updated_at = $2
 		WHERE id = ANY($3) AND status = $4
 	`, ReservationStatusConsumed, decisionNow, resIDs, ReservationStatusHeld)
 	if err != nil {
 		return Order{}, translatePGError(err, "update reservations to consumed")
+	}
+	if cmdTag.RowsAffected() != int64(len(resIDs)) {
+		return Order{}, ErrConflict
 	}
 
 	// 9. Update Order
@@ -649,6 +683,12 @@ func (r Repository) CancelPendingOrder(ctx context.Context, exec DBExecutor, sto
 	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" {
 		return Order{}, ErrInvalidInput
 	}
+	if authority == AuthorityScheduler {
+		return Order{}, ErrInvalidTransition
+	}
+	if authority != AuthorityCustomer && authority != AuthoritySeller {
+		return Order{}, ErrInvalidTransition
+	}
 	if exec == nil {
 		var res Order
 		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -658,7 +698,11 @@ func (r Repository) CancelPendingOrder(ctx context.Context, exec DBExecutor, sto
 		})
 		return res, err
 	}
-	return r.cancelPendingOrderExec(ctx, exec, storeID, orderID, authority, actorSubject, reason, correlationID)
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.cancelPendingOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
 }
 
 func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
@@ -695,9 +739,6 @@ func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, s
 	if order.Status != OrderStatusPending {
 		return Order{}, ErrInvalidTransition
 	}
-	if authority != AuthorityCustomer && authority != AuthoritySeller && authority != AuthorityScheduler {
-		return Order{}, ErrInvalidTransition
-	}
 
 	// 2. Capture decision_now = clock_timestamp() AFTER order lock
 	decisionNow, err := getDBClockTimestamp(ctx, db)
@@ -717,9 +758,10 @@ func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, s
 
 	resIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.InventoryReservationID != "" {
-			resIDs = append(resIDs, item.InventoryReservationID)
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
 		}
+		resIDs = append(resIDs, item.InventoryReservationID)
 	}
 
 	var snapIDs []string
@@ -756,15 +798,20 @@ func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, s
 		return Order{}, err
 	}
 
-	// Filter held reservations
-	heldReservations := make([]InventoryReservation, 0, len(reservations))
+	// Fail closed if any reservation is missing or not held, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
 	for _, res := range reservations {
-		if res.Status == ReservationStatusHeld {
-			heldReservations = append(heldReservations, res)
+		if res.Status != ReservationStatusHeld {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
 		}
 	}
 
-	aggregates := AggregateReservationsBySnapshot(heldReservations)
+	aggregates := AggregateReservationsBySnapshot(reservations)
 
 	for _, agg := range aggregates {
 		snap, ok := snapshots[agg.SnapshotID]
@@ -777,13 +824,16 @@ func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, s
 		}
 		newVersion := snap.Version + 1
 
-		_, err := db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_snapshots
 			SET reserved_qty = $1, version = $2, updated_at = $3
 			WHERE id = $4 AND version = $5
 		`, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
 		if err != nil {
 			return Order{}, translatePGError(err, "update snapshot for pending cancel")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
 		}
 
 		movID := uuid.NewString()
@@ -801,13 +851,16 @@ func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, s
 	}
 
 	if len(resIDs) > 0 {
-		_, err = db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_reservations
 			SET status = $1, updated_at = $2
 			WHERE id = ANY($3) AND status = $4
 		`, ReservationStatusReleased, decisionNow, resIDs, ReservationStatusHeld)
 		if err != nil {
 			return Order{}, translatePGError(err, "update reservations to released")
+		}
+		if cmdTag.RowsAffected() != int64(len(resIDs)) {
+			return Order{}, ErrConflict
 		}
 	}
 
@@ -850,6 +903,9 @@ func (r Repository) CancelConfirmedOrder(ctx context.Context, exec DBExecutor, s
 	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" {
 		return Order{}, ErrInvalidInput
 	}
+	if authority != AuthoritySeller {
+		return Order{}, ErrInvalidTransition
+	}
 	if exec == nil {
 		var res Order
 		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
@@ -859,7 +915,11 @@ func (r Repository) CancelConfirmedOrder(ctx context.Context, exec DBExecutor, s
 		})
 		return res, err
 	}
-	return r.cancelConfirmedOrderExec(ctx, exec, storeID, orderID, authority, actorSubject, reason, correlationID)
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.cancelConfirmedOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
 }
 
 func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
@@ -896,9 +956,6 @@ func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor,
 	if order.Status != OrderStatusConfirmed && order.Status != OrderStatusProcessing {
 		return Order{}, ErrInvalidTransition
 	}
-	if authority != AuthoritySeller {
-		return Order{}, ErrInvalidTransition
-	}
 
 	// 2. Capture decision_now = clock_timestamp() AFTER order lock
 	decisionNow, err := getDBClockTimestamp(ctx, db)
@@ -918,9 +975,10 @@ func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor,
 
 	resIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.InventoryReservationID != "" {
-			resIDs = append(resIDs, item.InventoryReservationID)
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
 		}
+		resIDs = append(resIDs, item.InventoryReservationID)
 	}
 
 	var snapIDs []string
@@ -957,15 +1015,20 @@ func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor,
 		return Order{}, err
 	}
 
-	// Collect consumed reservations to restock
-	consumedReservations := make([]InventoryReservation, 0, len(reservations))
+	// Fail closed if any reservation is missing or not consumed, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
 	for _, res := range reservations {
-		if res.Status == ReservationStatusConsumed {
-			consumedReservations = append(consumedReservations, res)
+		if res.Status != ReservationStatusConsumed {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
 		}
 	}
 
-	aggregates := AggregateReservationsBySnapshot(consumedReservations)
+	aggregates := AggregateReservationsBySnapshot(reservations)
 
 	for _, agg := range aggregates {
 		snap, ok := snapshots[agg.SnapshotID]
@@ -975,13 +1038,16 @@ func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor,
 		newOnHand := snap.OnHandQty + agg.AggregateQuantity
 		newVersion := snap.Version + 1
 
-		_, err := db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_snapshots
 			SET on_hand_qty = $1, version = $2, updated_at = $3
 			WHERE id = $4 AND version = $5
 		`, newOnHand, newVersion, decisionNow, snap.ID, snap.Version)
 		if err != nil {
 			return Order{}, translatePGError(err, "update snapshot for restock")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
 		}
 
 		movID := uuid.NewString()
@@ -1046,11 +1112,15 @@ func (r Repository) ExpirePendingOrder(ctx context.Context, exec DBExecutor, ord
 		})
 		return res, err
 	}
-	return r.expirePendingOrderExec(ctx, exec, orderID)
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.expirePendingOrderExec(ctx, tx, orderID)
 }
 
 func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, orderID string) (Order, error) {
-	// 1. Lock pending Order FOR UPDATE
+	// 1. Lock Order FOR UPDATE
 	var order Order
 	err := db.QueryRow(ctx, `
 		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
@@ -1058,7 +1128,7 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 		       total_minor, confirmation_deadline_at, cancellation_reason, aggregate_version,
 		       created_at, updated_at
 		FROM orders
-		WHERE id = $1 AND status = 'pending'
+		WHERE id = $1
 		FOR UPDATE
 	`, orderID).Scan(
 		&order.ID, &order.OrderNumber, &order.StoreID, &order.MarketCode, &order.CustomerID,
@@ -1068,9 +1138,19 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 	)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return Order{}, nil // Safe no-op if row not found or no longer pending
+			return Order{}, nil // Safe no-op if row not found
 		}
 		return Order{}, translatePGError(err, "lock order for expiry")
+	}
+
+	if order.Status != OrderStatusPending {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil // Safe no-op if no longer pending
 	}
 
 	// 2. Capture decision_now = clock_timestamp() AFTER order lock
@@ -1096,9 +1176,10 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 
 	resIDs := make([]string, 0, len(items))
 	for _, item := range items {
-		if item.InventoryReservationID != "" {
-			resIDs = append(resIDs, item.InventoryReservationID)
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
 		}
+		resIDs = append(resIDs, item.InventoryReservationID)
 	}
 
 	var snapIDs []string
@@ -1135,14 +1216,20 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 		return Order{}, err
 	}
 
-	heldReservations := make([]InventoryReservation, 0, len(reservations))
+	// Fail closed if any reservation is missing or not held, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
 	for _, res := range reservations {
-		if res.Status == ReservationStatusHeld {
-			heldReservations = append(heldReservations, res)
+		if res.Status != ReservationStatusHeld {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
 		}
 	}
 
-	aggregates := AggregateReservationsBySnapshot(heldReservations)
+	aggregates := AggregateReservationsBySnapshot(reservations)
 
 	for _, agg := range aggregates {
 		snap, ok := snapshots[agg.SnapshotID]
@@ -1155,13 +1242,16 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 		}
 		newVersion := snap.Version + 1
 
-		_, err := db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_snapshots
 			SET reserved_qty = $1, version = $2, updated_at = $3
 			WHERE id = $4 AND version = $5
 		`, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
 		if err != nil {
 			return Order{}, translatePGError(err, "update snapshot for expiry")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
 		}
 
 		movID := uuid.NewString()
@@ -1175,13 +1265,16 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 	}
 
 	if len(resIDs) > 0 {
-		_, err = db.Exec(ctx, `
+		cmdTag, err := db.Exec(ctx, `
 			UPDATE inventory_reservations
 			SET status = $1, updated_at = $2
 			WHERE id = ANY($3) AND status = $4
 		`, ReservationStatusExpired, decisionNow, resIDs, ReservationStatusHeld)
 		if err != nil {
 			return Order{}, translatePGError(err, "update reservations to expired")
+		}
+		if cmdTag.RowsAffected() != int64(len(resIDs)) {
+			return Order{}, ErrConflict
 		}
 	}
 
@@ -1276,7 +1369,11 @@ func (r Repository) AdvanceOrderStatus(
 		})
 		return res, err
 	}
-	return r.advanceOrderStatusExec(ctx, exec, storeID, orderID, targetStatus, authority, actorSubject, reason, correlationID)
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.advanceOrderStatusExec(ctx, tx, storeID, orderID, targetStatus, authority, actorSubject, reason, correlationID)
 }
 
 func (r Repository) advanceOrderStatusExec(
@@ -1317,6 +1414,11 @@ func (r Repository) advanceOrderStatusExec(
 			order.Address = &addr
 		}
 		return order, nil
+	}
+
+	// Restrict to whitelisted inventory-neutral transitions only: confirmed -> processing, processing -> ready_for_shipping
+	if !isInventoryNeutralAdvance(order.Status, targetStatus, authority) {
+		return Order{}, ErrInvalidTransition
 	}
 
 	// 2. Capture decision_now = clock_timestamp() AFTER order lock
@@ -1388,6 +1490,9 @@ func (r Repository) UpdateOrderStatus(
 	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" || strings.TrimSpace(targetStatus) == "" {
 		return Order{}, ErrInvalidInput
 	}
+	if authority == AuthorityScheduler {
+		return Order{}, ErrInvalidTransition
+	}
 
 	db := r.getExec(exec)
 	var currentStatus string
@@ -1409,6 +1514,9 @@ func (r Repository) UpdateOrderStatus(
 			}
 			return r.ConfirmOrder(ctx, exec, storeID, orderID, actorSubject, "")
 		case OrderStatusCancelled:
+			if authority != AuthorityCustomer && authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
 			return r.CancelPendingOrder(ctx, exec, storeID, orderID, authority, actorSubject, reason, "")
 		default:
 			return Order{}, ErrInvalidTransition

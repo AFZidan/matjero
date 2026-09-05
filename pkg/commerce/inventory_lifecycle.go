@@ -61,18 +61,23 @@ type HoldReservationParams struct {
 // HoldReservation creates a held inventory reservation, bumps snapshot reserved_qty,
 // and inserts a reservation_held movement within the provided DBExecutor transaction.
 func (r Repository) HoldReservation(ctx context.Context, exec DBExecutor, params HoldReservationParams) (InventoryReservation, error) {
+	tx, err := requireTx(exec)
+	if err != nil {
+		return InventoryReservation{}, err
+	}
+
 	if strings.TrimSpace(params.SnapshotID) == "" ||
 		params.Quantity <= 0 ||
 		strings.TrimSpace(params.ReservationToken) == "" ||
 		params.ConfirmationDeadlineAt.IsZero() ||
-		params.DecisionNow.IsZero() {
+		params.DecisionNow.IsZero() ||
+		!params.ConfirmationDeadlineAt.After(params.DecisionNow) {
 		return InventoryReservation{}, ErrInvalidInput
 	}
-	db := r.getExec(exec)
 
 	// Lock snapshot FOR UPDATE
 	var snap InventorySnapshot
-	err := db.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT id, fulfillment_location_id, sku_id, on_hand_qty, reserved_qty, version, created_at, updated_at
 		FROM inventory_snapshots
 		WHERE id = $1
@@ -90,15 +95,21 @@ func (r Repository) HoldReservation(ctx context.Context, exec DBExecutor, params
 	}
 
 	newReservedQty := snap.ReservedQty + params.Quantity
+	if newReservedQty > snap.OnHandQty {
+		return InventoryReservation{}, ErrInsufficientInventory
+	}
 	newVersion := snap.Version + 1
 
-	_, err = db.Exec(ctx, `
+	cmdTag, err := tx.Exec(ctx, `
 		UPDATE inventory_snapshots
 		SET reserved_qty = $1, version = $2, updated_at = $3
 		WHERE id = $4 AND version = $5
 	`, newReservedQty, newVersion, params.DecisionNow, snap.ID, snap.Version)
 	if err != nil {
 		return InventoryReservation{}, translatePGError(err, "update inventory snapshot for hold")
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return InventoryReservation{}, ErrConflict
 	}
 
 	resID := uuid.NewString()
@@ -113,7 +124,7 @@ func (r Repository) HoldReservation(ctx context.Context, exec DBExecutor, params
 		UpdatedAt:           params.DecisionNow,
 	}
 
-	_, err = db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO inventory_reservations (id, inventory_snapshot_id, quantity, status, reservation_token, expires_at, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, res.ID, res.InventorySnapshotID, res.Quantity, res.Status, res.ReservationToken, res.ExpiresAt, res.CreatedAt, res.UpdatedAt)
@@ -122,7 +133,7 @@ func (r Repository) HoldReservation(ctx context.Context, exec DBExecutor, params
 	}
 
 	movID := uuid.NewString()
-	_, err = db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO inventory_movements (id, inventory_snapshot_id, movement_type, quantity_delta, on_hand_qty, reserved_qty, reason, principal_subject, correlation_id, causation_id, created_at)
 		VALUES ($1, $2, $3, 0, $4, $5, 'checkout_hold', 'checkout', '', '', $6)
 	`, movID, snap.ID, MovementTypeReservationHeld, snap.OnHandQty, newReservedQty, params.DecisionNow)
