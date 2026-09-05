@@ -246,6 +246,37 @@ func internalRoutes() []openapi.RouteSpec {
 			},
 			Responses: storefrontReadResponses("Product page", storefrontProductPageResponse{}),
 		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/storefront/carts", OperationID: "internalCreateStorefrontCart",
+			Summary: "Create a host-scoped Cart capability", Tags: []string{"Storefront"},
+			Responses: createResponses("Cart capability", CartResponse{}),
+		},
+		{
+			Method: http.MethodGet, Path: "/internal/v1/storefront/carts", OperationID: "internalGetStorefrontCart",
+			Summary: "Read a Cart by its bearer capability", Tags: []string{"Storefront"},
+			Parameters: []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}},
+			Responses:  readResponses("Cart", CartResponse{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/storefront/carts/items", OperationID: "internalAddStorefrontCartItem",
+			Summary: "Add a public SKU to a host-scoped Cart", Tags: []string{"Storefront"},
+			Parameters:  []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}},
+			RequestBody: CartAddItemRequest{}, Responses: writeResponses("Cart", CartResponse{}),
+		},
+		{
+			Method: http.MethodPatch, Path: "/internal/v1/storefront/carts/items/{itemID}", OperationID: "internalUpdateStorefrontCartItem",
+			Summary: "Update Cart item quantity", Tags: []string{"Storefront"},
+			Parameters: []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}, pathParam("itemID", "Cart item identifier")},
+			RequestBody: struct {
+				Quantity int64 `json:"quantity"`
+			}{}, Responses: writeResponses("Cart", CartResponse{}),
+		},
+		{
+			Method: http.MethodDelete, Path: "/internal/v1/storefront/carts/items/{itemID}", OperationID: "internalRemoveStorefrontCartItem",
+			Summary: "Remove a Cart item", Tags: []string{"Storefront"},
+			Parameters: []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}, pathParam("itemID", "Cart item identifier")},
+			Responses:  writeResponses("Cart", CartResponse{}),
+		},
 
 		// --- Sellers ---
 		{
@@ -533,6 +564,13 @@ func internalRoutes() []openapi.RouteSpec {
 			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
 			RequestBody: SellerListingImportRequest{},
 			Responses:   createResponses("Created listing", commerce.SellerListing{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/stores/{storeID}/locations", OperationID: "internalCreateStoreLocation",
+			Summary: "Create a Store-owned fulfillment location", Tags: []string{"Stores"},
+			Parameters:  []openapi.ParameterSpec{pathParam("storeID", "Store identifier")},
+			RequestBody: StoreFulfillmentLocationCreateRequest{},
+			Responses:   createResponses("Created Store-owned location", commerce.FulfillmentLocation{}),
 		},
 
 		// --- Seller listings ---

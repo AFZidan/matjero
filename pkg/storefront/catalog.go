@@ -99,6 +99,9 @@ func (s CatalogScope) Locale() i18n.Locale { return s.locale }
 // public storefront payload.
 func (s CatalogScope) StoreID() string { return s.storeID }
 
+// MarketCode reports the market bound to the host-resolved Store.
+func (s CatalogScope) MarketCode() string { return s.marketCode }
+
 func validateLocale(locale i18n.Locale) (i18n.Locale, error) {
 	if locale == "" {
 		return i18n.Default(), nil

@@ -182,6 +182,17 @@ func (s Service) CreateFulfillmentLocationForSubject(ctx context.Context, subjec
 	return s.repo.CreateFulfillmentLocation(ctx, supplierID, supplierMarketID, marketCode, code, name, locationType, status)
 }
 
+func (s Service) CreateStoreFulfillmentLocationForSubject(ctx context.Context, subject, storeID, code, name, locationType, status string) (FulfillmentLocation, error) {
+	store, err := s.repo.GetStore(ctx, storeID)
+	if err != nil {
+		return FulfillmentLocation{}, err
+	}
+	if _, err := s.RequireSellerAccess(ctx, subject, store.SellerID); err != nil {
+		return FulfillmentLocation{}, err
+	}
+	return s.repo.CreateStoreFulfillmentLocation(ctx, storeID, store.MarketCode, code, name, locationType, status)
+}
+
 func (s Service) CreateSupplierProductForSubject(ctx context.Context, subject, supplierID, productID, supplierCode, status string) (SupplierProduct, error) {
 	if _, err := s.RequireSupplierAccess(ctx, subject, supplierID); err != nil {
 		return SupplierProduct{}, err

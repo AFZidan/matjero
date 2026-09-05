@@ -135,7 +135,8 @@ func codeFor(err error) string {
 	case errors.Is(err, commerce.ErrInsufficientInventory):
 		return CodeInsufficientInventory
 	case errors.Is(err, commerce.ErrConflict),
-		errors.Is(err, themes.ErrConflict):
+		errors.Is(err, themes.ErrConflict),
+		errors.Is(err, commerce.ErrCartExpired):
 		return CodeConflict
 	case errors.Is(err, commerce.ErrUnavailable):
 		return CodeUnavailable
