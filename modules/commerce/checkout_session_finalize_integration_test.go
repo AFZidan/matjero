@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"math"
 	"runtime"
@@ -145,22 +146,26 @@ func testFinalizePayload(sessionID string) FinalizeRequest {
 	}
 }
 
-func waitForBlockedOnLock(t *testing.T, db *database.Pool) {
+func waitForBackendBlockedOnLock(t *testing.T, db *database.Pool, waiterPID int32, blockingPID int32) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		var count int
+		var isBlocked bool
 		err := db.QueryRow(context.Background(), `
-			SELECT count(*)
-			FROM pg_locks
-			WHERE granted = false
-		`).Scan(&count)
-		if err == nil && count > 0 {
+			SELECT EXISTS (
+				SELECT 1
+				FROM pg_stat_activity sa
+				WHERE sa.pid = $1
+				  AND sa.wait_event_type = 'Lock'
+				  AND $2 = ANY(pg_blocking_pids($1))
+			)
+		`, waiterPID, blockingPID).Scan(&isBlocked)
+		if err == nil && isBlocked {
 			return
 		}
 		runtime.Gosched()
 	}
-	t.Fatal("timed out waiting for transaction to block on lock")
+	t.Fatal("timed out waiting for waiter PID to block on holder PID lock")
 }
 
 type testSupplierCheckoutSetup struct {
@@ -476,6 +481,9 @@ func TestFinalizeCheckoutTwoOpenSessionsOneCartConcurrentContention(t *testing.T
 		t.Fatal(err)
 	}
 
+	sessionAPIDChan := make(chan int32, 1)
+	sessionBPIDChan := make(chan int32, 1)
+
 	sessionAHolding := make(chan struct{})
 	sessionACanCommit := make(chan struct{})
 
@@ -496,10 +504,11 @@ func TestFinalizeCheckoutTwoOpenSessionsOneCartConcurrentContention(t *testing.T
 	go func() {
 		defer wg.Done()
 		req1 := testFinalizePayload(setup.Session.ID)
-		order1, err1 = repo.FinalizeCheckout(ctx, setup.Store.ID, req1, "corr-sessA")
+		ctxA := WithTxPIDNotifier(ctx, sessionAPIDChan)
+		order1, err1 = repo.FinalizeCheckout(ctxA, setup.Store.ID, req1, "corr-sessA")
 	}()
 
-	// Wait until Session A has acquired Cart lock and hit hook
+	sessionAPID := <-sessionAPIDChan
 	<-sessionAHolding
 
 	// Goroutine 2: Session B (will attempt to lock Cart and block)
@@ -507,11 +516,14 @@ func TestFinalizeCheckoutTwoOpenSessionsOneCartConcurrentContention(t *testing.T
 	go func() {
 		defer wg.Done()
 		req2 := testFinalizePayload(session2.ID)
-		_, err2 = repo.FinalizeCheckout(ctx, setup.Store.ID, req2, "corr-sessB")
+		ctxB := WithTxPIDNotifier(ctx, sessionBPIDChan)
+		_, err2 = repo.FinalizeCheckout(ctxB, setup.Store.ID, req2, "corr-sessB")
 	}()
 
-	// Prove Session B is blocked waiting for Cart lock (granted = false) without sleep
-	waitForBlockedOnLock(t, db)
+	sessionBPID := <-sessionBPIDChan
+
+	// Prove Session B is blocked waiting for Session A's Cart lock without sleep
+	waitForBackendBlockedOnLock(t, db, sessionBPID, sessionAPID)
 
 	// Release Session A to commit
 	close(sessionACanCommit)
@@ -671,6 +683,63 @@ func TestFinalizeCheckoutLastUnitContention(t *testing.T) {
 	for _, err := range loserErrList {
 		if !errors.Is(err, ErrInsufficientInventory) && !errors.Is(err, ErrConflict) {
 			t.Fatalf("unexpected loser error code: %v", err)
+		}
+	}
+
+	winner := winnerList[0]
+
+	// Postcondition 1: Exactly 1 order committed for all competing carts
+	allSessionIDs := make([]string, 0, len(targets))
+	for _, tgt := range targets {
+		allSessionIDs = append(allSessionIDs, tgt.Session.ID)
+	}
+	var totalOrders int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE checkout_session_id = ANY($1)`, allSessionIDs).Scan(&totalOrders); err != nil {
+		t.Fatal(err)
+	}
+	if totalOrders != 1 {
+		t.Fatalf("total orders committed = %d, want 1", totalOrders)
+	}
+
+	// Postcondition 2: Exactly 1 held reservation survived
+	var totalHeldRes int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM inventory_reservations WHERE inventory_snapshot_id = $1 AND status = 'held'`, snapshotID).Scan(&totalHeldRes); err != nil {
+		t.Fatal(err)
+	}
+	if totalHeldRes != 1 {
+		t.Fatalf("total held reservations = %d, want 1", totalHeldRes)
+	}
+
+	// Postcondition 3: Exactly 1 reservation_held movement survived
+	var totalMovements int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1 AND movement_type = 'reservation_held'`, snapshotID).Scan(&totalMovements); err != nil {
+		t.Fatal(err)
+	}
+	if totalMovements != 1 {
+		t.Fatalf("total reservation_held movements = %d, want 1", totalMovements)
+	}
+
+	// Postcondition 4: Snapshot stock state
+	var onHand, reserved int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapshotID).Scan(&onHand, &reserved); err != nil {
+		t.Fatal(err)
+	}
+	if onHand != 1 || reserved != 1 {
+		t.Fatalf("snapshot on_hand=%d, reserved=%d; want on_hand=1, reserved=1", onHand, reserved)
+	}
+	if reserved > onHand {
+		t.Fatalf("OVERSOLD: reserved_qty (%d) > on_hand_qty (%d)", reserved, onHand)
+	}
+
+	// Postcondition 5: Losers leave zero side effects for losing sessions
+	for _, tgt := range targets {
+		if tgt.Session.ID == winner.CheckoutSessionID {
+			continue
+		}
+		var lOrderCount int
+		_ = db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE checkout_session_id = $1`, tgt.Session.ID).Scan(&lOrderCount)
+		if lOrderCount != 0 {
+			t.Fatalf("losing session %s created %d orders", tgt.Session.ID, lOrderCount)
 		}
 	}
 }
@@ -1092,18 +1161,25 @@ func TestOrderCreatedEnvelopeCompleteAndPrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var evtType, aggType, aggID, corrID, causID string
+	var evtID, evtType, aggType, aggID, corrID, causID string
 	var schemaVer, aggVer int64
 	var occurredAt time.Time
 	var payloadRaw []byte
 
 	err = db.QueryRow(ctx, `
-		SELECT event_type, schema_version, aggregate_type, aggregate_id, aggregate_version, correlation_id, causation_id, occurred_at, payload
+		SELECT event_id, event_type, schema_version, aggregate_type, aggregate_id, aggregate_version, correlation_id, causation_id, occurred_at, payload
 		FROM outbox_events
 		WHERE aggregate_id = $1 AND event_type = 'commerce.order.created.v1'
-	`, order.ID).Scan(&evtType, &schemaVer, &aggType, &aggID, &aggVer, &corrID, &causID, &occurredAt, &payloadRaw)
+	`, order.ID).Scan(&evtID, &evtType, &schemaVer, &aggType, &aggID, &aggVer, &corrID, &causID, &occurredAt, &payloadRaw)
 	if err != nil {
 		t.Fatalf("query outbox event failed: %v", err)
+	}
+
+	if _, err := uuid.Parse(evtID); err != nil || evtID == "" {
+		t.Fatalf("event_id = %s, expected valid non-empty UUID: %v", evtID, err)
+	}
+	if causID != "" {
+		t.Fatalf("causation_id = %s, want empty string for root HTTP checkout", causID)
 	}
 
 	if evtType != EventTypeOrderCreated {
@@ -1419,6 +1495,11 @@ func TestFinalizeCheckoutSessionExpiryAfterCartLockWait(t *testing.T) {
 	}
 	defer func() { _ = tx1.Rollback(ctx) }()
 
+	var holderPID int32
+	if err := tx1.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+
 	var cartID string
 	if err := tx1.QueryRow(ctx, `SELECT id FROM carts WHERE id = $1 FOR UPDATE`, setup.Cart.ID).Scan(&cartID); err != nil {
 		t.Fatal(err)
@@ -1426,17 +1507,21 @@ func TestFinalizeCheckoutSessionExpiryAfterCartLockWait(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var finalizeErr error
+	waiterPIDChan := make(chan int32, 1)
 
 	// Tx 2: call FinalizeCheckout (will lock Session, then block on Cart FOR UPDATE)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		req := testFinalizePayload(setup.Session.ID)
-		_, finalizeErr = repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-expiry-wait")
+		ctxWaiter := WithTxPIDNotifier(ctx, waiterPIDChan)
+		_, finalizeErr = repo.FinalizeCheckout(ctxWaiter, setup.Store.ID, req, "corr-expiry-wait")
 	}()
 
+	waiterPID := <-waiterPIDChan
+
 	// Detect Tx 2 blocked on Cart lock (zero sleep)
-	waitForBlockedOnLock(t, db)
+	waitForBackendBlockedOnLock(t, db, waiterPID, holderPID)
 
 	// Poll DB clock until clock_timestamp() > targetExpiry
 	for {
@@ -1447,6 +1532,7 @@ func TestFinalizeCheckoutSessionExpiryAfterCartLockWait(t *testing.T) {
 		if past {
 			break
 		}
+		runtime.Gosched()
 	}
 
 	// Helper Tx 1 commits, releasing Cart lock
@@ -1480,6 +1566,11 @@ func TestFinalizeCheckoutConfirmationWindowAfterInventoryWait(t *testing.T) {
 	}
 	defer func() { _ = tx1.Rollback(ctx) }()
 
+	var holderPID int32
+	if err := tx1.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+
 	var snapID string
 	if err := tx1.QueryRow(ctx, `SELECT id FROM inventory_snapshots WHERE id = $1 FOR UPDATE`, setup.SnapshotID).Scan(&snapID); err != nil {
 		t.Fatal(err)
@@ -1488,17 +1579,40 @@ func TestFinalizeCheckoutConfirmationWindowAfterInventoryWait(t *testing.T) {
 	var wg sync.WaitGroup
 	var order Order
 	var finalizeErr error
+	waiterPIDChan := make(chan int32, 1)
 
 	// Tx 2: call FinalizeCheckout (locks session, cart, sequence, then blocks on inventory snapshot lock)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		req := testFinalizePayload(setup.Session.ID)
-		order, finalizeErr = repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-window-wait")
+		ctxWaiter := WithTxPIDNotifier(ctx, waiterPIDChan)
+		order, finalizeErr = repo.FinalizeCheckout(ctxWaiter, setup.Store.ID, req, "corr-window-wait")
 	}()
 
+	waiterPID := <-waiterPIDChan
+
 	// Detect Tx 2 blocked on snapshot lock (zero sleep)
-	waitForBlockedOnLock(t, db)
+	waitForBackendBlockedOnLock(t, db, waiterPID, holderPID)
+
+	// Record DB clock while waiter is confirmed blocked
+	var blockedTimestamp time.Time
+	if err := db.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&blockedTimestamp); err != nil {
+		t.Fatal(err)
+	}
+	blockedTimestamp = blockedTimestamp.UTC()
+
+	// Advance DB clock beyond a meaningful boundary by polling DB clock
+	for {
+		var currentDBTime time.Time
+		if err := db.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&currentDBTime); err != nil {
+			t.Fatal(err)
+		}
+		if currentDBTime.After(blockedTimestamp.Add(5 * time.Millisecond)) {
+			break
+		}
+		runtime.Gosched()
+	}
 
 	// Release snapshot lock by committing Tx 1
 	if err := tx1.Commit(ctx); err != nil {
@@ -1509,6 +1623,10 @@ func TestFinalizeCheckoutConfirmationWindowAfterInventoryWait(t *testing.T) {
 
 	if finalizeErr != nil {
 		t.Fatalf("FinalizeCheckout failed: %v", finalizeErr)
+	}
+
+	if !order.CreatedAt.After(blockedTimestamp) {
+		t.Fatalf("order.created_at (%v) must be strictly after blockedTimestamp (%v)", order.CreatedAt, blockedTimestamp)
 	}
 
 	duration := order.ConfirmationDeadlineAt.Sub(order.CreatedAt)
@@ -1551,6 +1669,66 @@ func TestFinalizeCheckoutSupplierBacked(t *testing.T) {
 		}
 	})
 
+	t.Run("supplier B stock never eligible for supplier A listing", func(t *testing.T) {
+		suffix := uuid.NewString()
+		setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 0, 2000, 1200)
+
+		supplierB, err := repo.CreateSupplier(ctx, "supB-"+suffix, "Supplier B", "active", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		supBMarket, err := repo.CreateSupplierMarket(ctx, supplierB.ID, "EG", "active", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		locB := uuid.NewString()
+		if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, supplier_id, supplier_market_id, market_code, code, name, location_type, status) VALUES ($1, $2, $3, 'EG', $4, 'Loc B', 'warehouse', 'active')`, locB, supplierB.ID, supBMarket.ID, "locB-"+suffix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, fulfillment_location_id, sku_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 0, 1)`, uuid.NewString(), locB, setup.SKUID); err != nil {
+			t.Fatal(err)
+		}
+
+		req := testFinalizePayload(setup.Session.ID)
+		_, err = repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-supB-ineligible")
+		if !errors.Is(err, ErrInsufficientInventory) {
+			t.Fatalf("expected ErrInsufficientInventory when Supplier A stock is 0, got %v", err)
+		}
+	})
+
+	t.Run("store-owned stock never eligible for supplier A listing", func(t *testing.T) {
+		suffix := uuid.NewString()
+		setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 0, 2000, 1200)
+
+		storeLoc := uuid.NewString()
+		if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, store_id, market_code, code, name, location_type, status) VALUES ($1, $2, 'EG', $3, 'Store Loc', 'warehouse', 'active')`, storeLoc, setup.Store.ID, "storeLoc-"+suffix); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, fulfillment_location_id, sku_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 0, 1)`, uuid.NewString(), storeLoc, setup.SKUID); err != nil {
+			t.Fatal(err)
+		}
+
+		req := testFinalizePayload(setup.Session.ID)
+		_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-store-ineligible")
+		if !errors.Is(err, ErrInsufficientInventory) {
+			t.Fatalf("expected ErrInsufficientInventory when Supplier A stock is 0, got %v", err)
+		}
+	})
+
+	t.Run("inactive supplier location returns ErrInsufficientInventory", func(t *testing.T) {
+		suffix := uuid.NewString()
+		setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
+		if _, err := db.Exec(ctx, `UPDATE fulfillment_locations SET status = 'inactive' WHERE id = $1`, setup.LocationID); err != nil {
+			t.Fatal(err)
+		}
+
+		req := testFinalizePayload(setup.Session.ID)
+		_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-sup-inact-loc")
+		if !errors.Is(err, ErrInsufficientInventory) {
+			t.Fatalf("expected ErrInsufficientInventory when supplier location is inactive, got %v", err)
+		}
+	})
+
 	t.Run("inactive supplier offer returns ErrListingUnavailable", func(t *testing.T) {
 		suffix := uuid.NewString()
 		setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
@@ -1585,7 +1763,6 @@ func TestFinalizeCheckoutSellerOwnedSourceIsolation(t *testing.T) {
 		suffix := uuid.NewString()
 		setup := setupSellerCheckoutTest(t, db, repo, ctx, suffix, 10, 1000)
 
-		// Create Store B and move fulfillment location to Store B
 		storeB, err := repo.CreateStore(ctx, setup.Store.SellerID, "EG", "storeb-"+suffix, "Store B", "active", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -1614,7 +1791,6 @@ func TestFinalizeCheckoutSellerOwnedSourceIsolation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Convert location to supplier-owned
 		if _, err := db.Exec(ctx, `UPDATE fulfillment_locations SET store_id = NULL, supplier_id = $1, supplier_market_id = $2 WHERE id = $3`, supplier.ID, supMarket.ID, setup.LocationID); err != nil {
 			t.Fatal(err)
 		}
@@ -1653,21 +1829,31 @@ func TestFinalizeCheckoutCommercialPreAcceptanceRace(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx1.Rollback(ctx) }()
+
+	var holderPID int32
+	if err := tx1.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&holderPID); err != nil {
+		t.Fatal(err)
+	}
+
 	var snapID string
 	_ = tx1.QueryRow(ctx, `SELECT id FROM inventory_snapshots WHERE id = $1 FOR UPDATE`, setup.SnapshotID).Scan(&snapID)
 
 	var wg sync.WaitGroup
 	var finalizeErr error
+	waiterPIDChan := make(chan int32, 1)
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		req := testFinalizePayload(setup.Session.ID)
-		_, finalizeErr = repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-prerace")
+		ctxWaiter := WithTxPIDNotifier(ctx, waiterPIDChan)
+		_, finalizeErr = repo.FinalizeCheckout(ctxWaiter, setup.Store.ID, req, "corr-prerace")
 	}()
 
+	waiterPID := <-waiterPIDChan
+
 	// Wait until checkout reaches snapshot locking and blocks
-	waitForBlockedOnLock(t, db)
+	waitForBackendBlockedOnLock(t, db, waiterPID, holderPID)
 
 	// Mutate retail listing price while checkout is blocked
 	if _, err := db.Exec(ctx, `UPDATE seller_listing_prices SET amount_minor = 2500 WHERE seller_listing_id = $1 AND is_current = true`, setup.ListingID); err != nil {
@@ -1688,13 +1874,30 @@ func TestFinalizeCheckoutCommercialPostAcceptanceImmutability(t *testing.T) {
 	suffix := uuid.NewString()
 	setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
 
-	req := testFinalizePayload(setup.Session.ID)
-	order, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-postrace")
-	if err != nil {
-		t.Fatalf("FinalizeCheckout failed: %v", err)
+	hookReached := make(chan struct{})
+	canContinue := make(chan struct{})
+	testHookAfterCommercialAcceptance = func(hookCtx context.Context) error {
+		close(hookReached)
+		<-canContinue
+		return nil
 	}
+	defer func() { testHookAfterCommercialAcceptance = nil }()
 
-	// Later commercial changes: change retail price, supplier cost, listing status
+	var wg sync.WaitGroup
+	var order Order
+	var finalizeErr error
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		req := testFinalizePayload(setup.Session.ID)
+		order, finalizeErr = repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-postrace")
+	}()
+
+	// Wait until checkout reaches post-acceptance hook inside open transaction
+	<-hookReached
+
+	// Mutate commercial data externally while transaction remains open post-acceptance
 	if _, err := db.Exec(ctx, `UPDATE seller_listing_prices SET amount_minor = 9999 WHERE seller_listing_id = $1`, setup.ListingID); err != nil {
 		t.Fatal(err)
 	}
@@ -1703,6 +1906,14 @@ func TestFinalizeCheckoutCommercialPostAcceptanceImmutability(t *testing.T) {
 	}
 	if _, err := db.Exec(ctx, `UPDATE seller_listings SET status = 'inactive' WHERE id = $1`, setup.ListingID); err != nil {
 		t.Fatal(err)
+	}
+
+	// Unblock hook
+	close(canContinue)
+	wg.Wait()
+
+	if finalizeErr != nil {
+		t.Fatalf("FinalizeCheckout failed: %v", finalizeErr)
 	}
 
 	// Re-load persisted order and order item from DB
@@ -1720,6 +1931,278 @@ func TestFinalizeCheckoutCommercialPostAcceptanceImmutability(t *testing.T) {
 	}
 	if dbUnitPrice != 2000 || dbCost != 1200 {
 		t.Fatalf("persisted item snapshots changed: unit_price=%d, cost=%d", dbUnitPrice, dbCost)
+	}
+}
+
+func TestFinalizeCheckoutMarketCurrencyMismatch(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	seller, err := repo.CreateSeller(ctx, "seller-"+suffix, "Seller "+suffix, "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := repo.CreateStoreWithDomain(ctx, seller.ID, "EG", "store-"+suffix, "Store "+suffix, "active", nil, suffix+".test", "platform", "active", true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO products (id, slug, status) VALUES ($1, $2, 'active')`, productID, "prod-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO product_translations (product_id, locale, name) VALUES ($1, 'en', 'Prod')`, productID); err != nil {
+		t.Fatal(err)
+	}
+	variantID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantID, productID, "VAR-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	skuID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO skus (id, variant_id, code, status) VALUES ($1, $2, $3, 'active')`, skuID, variantID, "SKU-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	listingID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listings (id, store_id, product_id, supplier_offer_id, market_code, status) VALUES ($1, $2, $3, NULL, 'EG', 'active')`, listingID, store.ID, productID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listing_prices (id, seller_listing_id, amount_minor, currency_code, is_current) VALUES ($1, $2, 1000, 'SAR', true)`, uuid.NewString(), listingID); err != nil {
+		t.Fatal(err)
+	}
+	locationID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO fulfillment_locations (id, store_id, supplier_id, market_code, code, name, location_type, status) VALUES ($1, $2, NULL, 'EG', $3, 'Loc', 'warehouse', 'active')`, locationID, store.ID, "LOC-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO inventory_snapshots (id, fulfillment_location_id, sku_id, on_hand_qty, reserved_qty, version) VALUES ($1, $2, $3, 10, 0, 1)`, uuid.NewString(), locationID, skuID); err != nil {
+		t.Fatal(err)
+	}
+
+	cart, cartToken, err := repo.CreateCart(ctx, store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO cart_items (id, cart_id, seller_listing_id, sku_id, quantity, expected_unit_price_minor, expected_currency_code) VALUES ($1, $2, $3, $4, 1, 1000, 'SAR')`, uuid.NewString(), cart.ID, listingID, skuID); err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := testFinalizePayload(session.ID)
+	_, err = repo.FinalizeCheckout(ctx, store.ID, req, "corr-mismatch")
+	if !errors.Is(err, ErrMarketMismatch) {
+		t.Fatalf("expected ErrMarketMismatch when listing/cart currency SAR != Store EGP, got %v", err)
+	}
+
+	var orderCount int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE checkout_session_id = $1`, session.ID).Scan(&orderCount)
+	if orderCount != 0 {
+		t.Fatalf("order created despite market currency mismatch: %d", orderCount)
+	}
+}
+
+func TestFinalizeCheckoutSupplierOfferAvailabilityUnexpectedDBError(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
+
+	if _, err := db.Exec(ctx, `ALTER TABLE supplier_offer_availability RENAME TO supplier_offer_availability_temp`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = db.Exec(ctx, `ALTER TABLE supplier_offer_availability_temp RENAME TO supplier_offer_availability`)
+	})
+
+	req := testFinalizePayload(setup.Session.ID)
+	_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-sup-dberr")
+	if err == nil {
+		t.Fatal("expected DB error for missing availability table, got nil")
+	}
+	if errors.Is(err, ErrListingUnavailable) || errors.Is(err, ErrPriceChanged) || errors.Is(err, ErrMarketMismatch) {
+		t.Fatalf("expected unexpected DB error, got domain error %v", err)
+	}
+
+	var orderCount int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE checkout_session_id = $1`, setup.Session.ID).Scan(&orderCount)
+	if orderCount != 0 {
+		t.Fatalf("orderCount = %d, want 0", orderCount)
+	}
+}
+
+func TestOrderToPublicPrivacy(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
+
+	req := testFinalizePayload(setup.Session.ID)
+	order, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-pub-privacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pub := order.ToPublic()
+	raw, err := json.Marshal(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	jsonStr := string(raw)
+	for _, forbidden := range []string{
+		"supplier_cost_minor",
+		"supplier_cost_currency_code",
+		"source_supplier_id",
+		"supplier_offer_id",
+		"fulfillment_location_id",
+		"inventory_reservation_id",
+		"guest_order_access_token_digest",
+		"reservation_token",
+	} {
+		if containsString(jsonStr, forbidden) {
+			t.Fatalf("public order DTO exposes private field %s: %s", forbidden, jsonStr)
+		}
+	}
+}
+
+func TestFinalizeCheckoutPersistedListingNoRemap(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSellerCheckoutTest(t, db, repo, ctx, suffix, 10, 1000)
+
+	// Create Cart 2 and Session 2 with Listing A BEFORE Listing B exists
+	_, token2, err := repo.CreateCart(ctx, setup.Store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddCartItem(ctx, setup.Store.ID, token2, setup.SKUID, 1); err != nil {
+		t.Fatal(err)
+	}
+	session2, _, err := repo.CreateCheckoutSession(ctx, setup.Store.ID, token2, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Subtest 1: Listing A is active -> Checkout Session 1 succeeds with Listing A
+	req := testFinalizePayload(setup.Session.ID)
+	order, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-noremap-1")
+	if err != nil {
+		t.Fatalf("FinalizeCheckout failed: %v", err)
+	}
+	if *order.Items[0].SellerListingID != setup.ListingID {
+		t.Fatalf("seller_listing_id = %s, want %s (Listing A)", *order.Items[0].SellerListingID, setup.ListingID)
+	}
+
+	// Create Listing B (a newer active listing for the same Product and SKU)
+	listingB := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listings (id, store_id, product_id, supplier_offer_id, market_code, status) VALUES ($1, $2, $3, NULL, 'EG', 'active')`, listingB, setup.Store.ID, setup.ProductID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listing_prices (id, seller_listing_id, amount_minor, currency_code, is_current) VALUES ($1, $2, 1000, 'EGP', true)`, uuid.NewString(), listingB); err != nil {
+		t.Fatal(err)
+	}
+
+	// Deactivate Listing A
+	if _, err := db.Exec(ctx, `UPDATE seller_listings SET status = 'inactive' WHERE id = $1`, setup.ListingID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Subtest 2: Checkout Session 2 (persisted Listing A) fails with ErrListingUnavailable without remapping to Listing B
+	req2 := testFinalizePayload(session2.ID)
+	_, err = repo.FinalizeCheckout(ctx, setup.Store.ID, req2, "corr-noremap-2")
+	if !errors.Is(err, ErrListingUnavailable) {
+		t.Fatalf("expected ErrListingUnavailable when Listing A is inactive, got %v", err)
+	}
+}
+
+func TestFinalizeCheckoutSessionFinalizedCartActiveInvariant(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSellerCheckoutTest(t, db, repo, ctx, suffix, 10, 1000)
+
+	if _, err := db.Exec(ctx, `UPDATE checkout_sessions SET status = 'finalized', finalize_fingerprint = 'fp' WHERE id = $1`, setup.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := testFinalizePayload(setup.Session.ID)
+	_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-inv-fp")
+	if !errors.Is(err, ErrCheckoutCartInvariant) {
+		t.Fatalf("expected ErrCheckoutCartInvariant, got %v", err)
+	}
+}
+
+func TestFinalizeCheckoutImmutabilitySnapshots(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSupplierCheckoutTest(t, db, repo, ctx, suffix, 10, 2000, 1200)
+
+	req := testFinalizePayload(setup.Session.ID)
+	order, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-immut")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE product_translations SET name = 'Mutated Product' WHERE product_id = $1`, setup.ProductID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE skus SET code = 'MUTATED-SKU' WHERE id = $1`, setup.SKUID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE supplier_offer_prices SET amount_minor = 5555 WHERE supplier_offer_id = $1`, setup.Offer.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	var pTitle, kCode string
+	var supCost int64
+	if err := db.QueryRow(ctx, `SELECT product_title_snapshot, sku_code_snapshot, supplier_cost_minor FROM order_items WHERE order_id = $1`, order.ID).Scan(&pTitle, &kCode, &supCost); err != nil {
+		t.Fatal(err)
+	}
+	if pTitle == "Mutated Product" {
+		t.Fatalf("product_title_snapshot mutated to %s", pTitle)
+	}
+	if kCode == "MUTATED-SKU" {
+		t.Fatalf("sku_code_snapshot mutated to %s", kCode)
+	}
+	if supCost != 1200 {
+		t.Fatalf("supplier_cost_minor mutated to %d", supCost)
+	}
+
+	_, err = db.Exec(ctx, `DELETE FROM supplier_offers WHERE id = $1`, setup.Offer.ID)
+	if err == nil {
+		t.Fatal("expected foreign key deletion error for supplier offer referenced by order item, got nil")
+	}
+}
+
+func TestFinalizeCheckoutIncompletePayloadRollback(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSellerCheckoutTest(t, db, repo, ctx, suffix, 10, 1000)
+
+	t.Run("missing recipient name", func(t *testing.T) {
+		req := testFinalizePayload(setup.Session.ID)
+		req.ShippingAddress.RecipientName = ""
+		_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-no-name")
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("expected ErrInvalidInput, got %v", err)
+		}
+	})
+
+	t.Run("missing contact email", func(t *testing.T) {
+		req := testFinalizePayload(setup.Session.ID)
+		req.ContactEmail = ""
+		_, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-no-email")
+		if !errors.Is(err, ErrInvalidInput) {
+			t.Fatalf("expected ErrInvalidInput, got %v", err)
+		}
+	})
+
+	var sessionStatus string
+	_ = db.QueryRow(ctx, `SELECT status FROM checkout_sessions WHERE id = $1`, setup.Session.ID).Scan(&sessionStatus)
+	if sessionStatus != "open" {
+		t.Fatalf("session status = %s, want open", sessionStatus)
+	}
+	var cartStatus string
+	_ = db.QueryRow(ctx, `SELECT status FROM carts WHERE id = $1`, setup.Cart.ID).Scan(&cartStatus)
+	if cartStatus != "active" {
+		t.Fatalf("cart status = %s, want active", cartStatus)
 	}
 }
 

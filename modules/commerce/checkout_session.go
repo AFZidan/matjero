@@ -230,8 +230,15 @@ func (r Repository) EvaluateCheckoutSession(ctx context.Context, storeID string,
 }
 
 var (
-	testHookBeforeFinalizeCommit func(ctx context.Context) error
+	testHookBeforeFinalizeCommit      func(ctx context.Context) error
+	testHookAfterCommercialAcceptance func(ctx context.Context) error
 )
+
+type txPIDKey struct{}
+
+func WithTxPIDNotifier(ctx context.Context, ch chan<- int32) context.Context {
+	return context.WithValue(ctx, txPIDKey{}, ch)
+}
 
 func checkedMultiply(a, b int64) (int64, error) {
 	if a == 0 || b == 0 {
@@ -259,6 +266,13 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 
 	var finalizedOrder Order
 	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		if ch, ok := ctx.Value(txPIDKey{}).(chan<- int32); ok && ch != nil {
+			var pid int32
+			if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&pid); err == nil {
+				ch <- pid
+			}
+		}
+
 		// 1. Lock Checkout Session FOR UPDATE (by session_id and store_id)
 		var session CheckoutSession
 		if err := tx.QueryRow(ctx, `
@@ -460,8 +474,11 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 			if slpAmountMinor != item.ExpectedUnitPriceMinor {
 				return ErrPriceChanged
 			}
-			if slpCurrencyCode != item.ExpectedCurrencyCode || slpCurrencyCode != storeMarketCurrency {
+			if slpCurrencyCode != item.ExpectedCurrencyCode {
 				return ErrPriceChanged
+			}
+			if slpCurrencyCode != storeMarketCurrency {
+				return ErrMarketMismatch
 			}
 
 			lv.sellerListingID = item.SellerListingID
@@ -614,6 +631,12 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 			return fmt.Errorf("capture order acceptance timestamp: %w", err)
 		}
 		orderCreatedAt = orderCreatedAt.UTC()
+
+		if testHookAfterCommercialAcceptance != nil {
+			if err := testHookAfterCommercialAcceptance(ctx); err != nil {
+				return err
+			}
+		}
 
 		// 22. Confirmation Deadline
 		duration := r.OrderConfirmationDuration
