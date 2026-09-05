@@ -28,6 +28,27 @@ func ResetNewClaimUUIDForTest() {
 	}
 }
 
+var (
+	testHookAfterClaimBatch      func(claimID string, eventIDs []string)
+	testHookBeforeNextBatchEvent func(claimID string, eventID string, remainingIDs []string)
+)
+
+func SetTestHookAfterClaimBatchForTest(fn func(claimID string, eventIDs []string)) {
+	testHookAfterClaimBatch = fn
+}
+
+func ResetTestHookAfterClaimBatchForTest() {
+	testHookAfterClaimBatch = nil
+}
+
+func SetTestHookBeforeNextBatchEventForTest(fn func(claimID string, eventID string, remainingIDs []string)) {
+	testHookBeforeNextBatchEvent = fn
+}
+
+func ResetTestHookBeforeNextBatchEventForTest() {
+	testHookBeforeNextBatchEvent = nil
+}
+
 type EventPublisher interface {
 	PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error
 }
@@ -107,21 +128,38 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 
+	if testHookAfterClaimBatch != nil {
+		testHookAfterClaimBatch(claimID, claimedIDs)
+	}
+
 	p.logger.Info("claimed outbox batch",
 		slog.String("claim_id", claimID),
 		slog.Int("batch_size", len(claimedIDs)),
 	)
 
-	// DB-authoritative near-expiry renewal check
-	_ = p.store.RenewBatchNearExpiry(ctx, p.db, claimedIDs, claimID, p.cfg.OutboxClaimLeaseDuration, p.cfg.OutboxClaimRenewalMargin)
-
 	var transportErr error
 
-	for _, eventID := range claimedIDs {
+	for i, eventID := range claimedIDs {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		default:
+		}
+
+		remainingIDs := claimedIDs[i:]
+		if err := p.store.RenewBatchNearExpiry(
+			ctx,
+			p.db,
+			remainingIDs,
+			claimID,
+			p.cfg.OutboxClaimLeaseDuration,
+			p.cfg.OutboxClaimRenewalMargin,
+		); err != nil {
+			return 0, fmt.Errorf("renew batch near expiry: %w", err)
+		}
+
+		if testHookBeforeNextBatchEvent != nil {
+			testHookBeforeNextBatchEvent(claimID, eventID, remainingIDs)
 		}
 
 		envelope, err := p.store.RenewAndLoadEvent(ctx, p.db, eventID, claimID, p.cfg.OutboxClaimLeaseDuration)
@@ -139,18 +177,11 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 					slog.String("error", err.Error()),
 				)
 				if _, relErr := p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID); relErr != nil {
-					p.logger.Error("failed to release malformed outbox event with backoff",
-						slog.String("event_id", eventID),
-						slog.String("error", relErr.Error()),
-					)
+					return 0, fmt.Errorf("release malformed outbox event with backoff: %w", relErr)
 				}
 				continue
 			}
-			p.logger.Error("failed to renew and load outbox event",
-				slog.String("event_id", eventID),
-				slog.String("error", err.Error()),
-			)
-			continue
+			return 0, fmt.Errorf("renew and load outbox event: %w", err)
 		}
 
 		exchange, routingKey, err := ResolveRoutingKey(envelope.EventType)
@@ -161,10 +192,7 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 				slog.String("error", err.Error()),
 			)
 			if _, relErr := p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID); relErr != nil {
-				p.logger.Error("failed to release unknown routing outbox event with backoff",
-					slog.String("event_id", eventID),
-					slog.String("error", relErr.Error()),
-				)
+				return 0, fmt.Errorf("release unknown routing outbox event with backoff: %w", relErr)
 			}
 			continue
 		}
@@ -181,10 +209,7 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 			)
 			released, relErr := p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID)
 			if relErr != nil {
-				p.logger.Error("failed to release outbox event with backoff",
-					slog.String("event_id", eventID),
-					slog.String("error", relErr.Error()),
-				)
+				return 0, fmt.Errorf("release outbox event with backoff: %w", relErr)
 			} else if !released {
 				p.logger.Warn("stale release with backoff (claim lost)",
 					slog.String("event_id", eventID),
@@ -201,10 +226,7 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 
 		marked, markErr := p.store.MarkPublished(ctx, p.db, eventID, claimID)
 		if markErr != nil {
-			p.logger.Error("failed to mark outbox event published",
-				slog.String("event_id", eventID),
-				slog.String("error", markErr.Error()),
-			)
+			return 0, fmt.Errorf("mark outbox event published: %w", markErr)
 		} else if !marked {
 			p.logger.Warn("stale mark published (claim lost or already published)",
 				slog.String("event_id", eventID),

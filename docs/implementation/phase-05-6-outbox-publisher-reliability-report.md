@@ -6,7 +6,7 @@ Phase 5.6 implements a production-grade, multi-publisher reliable Transactional 
 
 - **Base SHA:** `65a53f47b393775ff27e733c1ae3289fe79627aa`
 - **Branch:** `feature/p5-6-outbox-publisher-reliability`
-- **Head SHA:** `73359a9e190a3e6dd4b72c02766d85608575859e`
+- **Head SHA:** `3ef0c208a71e8877a2812ae4b99e37b12ba6f955`
 - **PR:** `https://github.com/matjeroapps/core/pull/32`
 - **Migration F:** `000013_outbox_publish_claims` (up/down)
 
@@ -131,7 +131,7 @@ Added to `packages/config/config.go`:
 
 | Matrix Case | Requirement Description | Named Test | Result |
 |---|---|---|---|
-| **49** | DB-Authoritative Near-Expiry Renewal | `TestOutboxNearExpiryDBAuthoritativeRenewal` | PASS |
+| **49** | DB-Authoritative Near-Expiry Renewal & Long-Batch Pacing | `TestOutboxNearExpiryDBAuthoritativeRenewal`, `TestOutboxProcessorLongBatchRenewsNearExpiry` | PASS |
 | **50** | Multi-publisher claim isolation & `SKIP LOCKED` | `TestOutboxTwoPublishersNeverClaimSameEvent`, `TestOutboxClaimBatchUsesSkipLocked` | PASS |
 | **51** | Stale lease recovery | `TestOutboxStaleLeaseCanBeReclaimed` | PASS |
 | **52** | Stale ACK rejection | `TestOutboxStaleAckCannotMarkPublished` | PASS |
@@ -141,7 +141,7 @@ Added to `packages/config/config.go`:
 | **56** | Multi-consumer Inbox independence | `TestInboxSameEventDifferentConsumersEachProcessOnce` | PASS |
 | **78** | Per-publish claim renewal | `TestOutboxRenewClaimAndLoadReturnsCompleteEnvelope` | PASS |
 | **79** | Lost claim skips network publish | `TestOutboxLostClaimSkipsNetworkPublish` | PASS |
-| **80** | Confirm timeout < claim lease & runtime timeout | `TestConfigValidatesConfirmTimeoutLessThanLease`, `TestRabbitPublisherConfirmTimeoutFails` | PASS |
+| **80** | Confirm timeout < claim lease & runtime timeout | `TestConfigValidatesConfirmTimeoutLessThanLease`, `TestRabbitPublisherConfirmTimeoutFails`, `TestOutboxConfirmTimeoutBackoff` | PASS |
 | **81** | Ambiguous broker delivery safe | `TestOutboxConfirmThenCrashRepublishesSameEventID` | PASS |
 | **96** | Complete `OrderCreated` envelope matches Outbox | `TestOrderCreatedPublishedEnvelopeMatchesOutbox` | PASS |
 | **97** | Retrying `OrderStatusChanged` uses stable `event_id` | `TestOutboxRetryPreservesEventID` | PASS |
@@ -149,7 +149,8 @@ Added to `packages/config/config.go`:
 
 ### Additional Reliability Verification
 
-- **Worker Reconnect Loop:** `TestWorkerInitialRabbitSetupFailureRetries`, `TestWorkerRuntimeTransportFailureReconnects`, `TestWorkerGracefulShutdownOnContextCancel` (PASS)
+- **Worker Reconnect Loop & Pacing:** `TestWorkerInitialRabbitSetupFailureRetries`, `TestWorkerRuntimeTransportFailureReconnects`, `TestWorkerGracefulShutdownOnContextCancel` (PASS)
+- **NACK & Confirm Timeout Handling:** `TestRabbitPublisherNACKHandling`, `TestOutboxNACKSchedulesBackoff`, `TestOutboxConfirmTimeoutBackoff` (PASS)
 - **Large `int64` Precision Preservation:** `TestOutboxPayloadLargeInt64Precision` (PASS)
 - **Existing Row Migration Compatibility:** `TestMigration000013ExistingRowCompatibility` (PASS)
 - **Malformed Persisted Event Guarded Backoff:** `TestOutboxMalformedPayloadTriggersBackoff`, `TestOutboxInvalidEnvelopeFieldsTriggersBackoff`, `TestOutboxStaleMalformedReleaseProtection` (PASS)

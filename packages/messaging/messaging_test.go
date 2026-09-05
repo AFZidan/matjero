@@ -14,6 +14,31 @@ import (
 	"github.com/matjeroapps/core/packages/messaging"
 )
 
+type mockConfirmWaiter struct {
+	acked bool
+	err   error
+}
+
+func (m mockConfirmWaiter) WaitContext(ctx context.Context) (bool, error) {
+	return m.acked, m.err
+}
+
+func sampleEnvelope() events.EventEnvelope {
+	return events.EventEnvelope{
+		EventID:          uuid.NewString(),
+		EventType:        "commerce.order.created.v1",
+		SchemaVersion:    1,
+		AggregateType:    "order",
+		AggregateID:      "ord_123",
+		AggregateVersion: 1,
+		CorrelationID:    "corr_abc_999",
+		OccurredAt:       time.Now().UTC(),
+		Payload: map[string]any{
+			"order_id": "ord_123",
+		},
+	}
+}
+
 func TestRabbitPublisherNilChannelFails(t *testing.T) {
 	_, err := messaging.NewRabbitPublisher(nil)
 	if err == nil {
@@ -21,44 +46,44 @@ func TestRabbitPublisherNilChannelFails(t *testing.T) {
 	}
 }
 
-func TestRabbitPublisherConfirmTimeoutFails(t *testing.T) {
-	rabbitURL := os.Getenv("TEST_RABBITMQ_URL")
-	if rabbitURL == "" {
-		t.Skip("TEST_RABBITMQ_URL not set")
-	}
+func TestRabbitPublisherNACKHandling(t *testing.T) {
+	pub := messaging.NewRabbitPublisherWithSeamsForTest(
+		nil,
+		func(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) (messaging.ConfirmationWaiter, error) {
+			return mockConfirmWaiter{acked: false, err: nil}, nil
+		},
+		nil,
+	)
 
-	conn, err := amqp.Dial(rabbitURL)
-	if err != nil {
-		t.Fatalf("RabbitMQ connection failed at %s: %v", rabbitURL, err)
-	}
-	defer conn.Close()
-
-	ch, err := conn.Channel()
-	if err != nil {
-		t.Fatalf("open channel: %v", err)
-	}
-	defer ch.Close()
-
-	pub, err := messaging.NewRabbitPublisher(ch)
-	if err != nil {
-		t.Fatalf("NewRabbitPublisher error: %v", err)
-	}
-
-	env := events.EventEnvelope{
-		EventID:       uuid.NewString(),
-		EventType:     "commerce.order.created.v1",
-		SchemaVersion: 1,
-		OccurredAt:    time.Now(),
-		Payload:       map[string]any{},
-	}
-
-	// Canceled context should fail publish confirm immediately
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	err = pub.PublishEvent(ctx, "commerce.events", "order.created", env)
+	env := sampleEnvelope()
+	err := pub.PublishEvent(context.Background(), "commerce.events", "order.created", env)
 	if err == nil {
-		t.Fatal("expected publish with canceled context to fail, got nil")
+		t.Fatal("expected NACK error, got nil")
+	}
+	if messaging.IsPublisherUnavailable(err) {
+		t.Errorf("expected NACK error NOT to be classified as publisher unavailable: %v", err)
+	}
+}
+
+func TestRabbitPublisherConfirmTimeoutFails(t *testing.T) {
+	pub := messaging.NewRabbitPublisherWithSeamsForTest(
+		nil,
+		func(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) (messaging.ConfirmationWaiter, error) {
+			return mockConfirmWaiter{acked: false, err: context.DeadlineExceeded}, nil
+		},
+		nil,
+	)
+
+	env := sampleEnvelope()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	err := pub.PublishEvent(ctx, "commerce.events", "order.created", env)
+	if err == nil {
+		t.Fatal("expected confirm timeout error, got nil")
+	}
+	if messaging.IsPublisherUnavailable(err) {
+		t.Errorf("expected confirm timeout error NOT to be classified as publisher unavailable: %v", err)
 	}
 }
 

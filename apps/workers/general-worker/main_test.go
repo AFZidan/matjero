@@ -86,7 +86,7 @@ func TestWorkerInitialRabbitSetupFailureRetries(t *testing.T) {
 		return nil, nil, &fakeWorkerPublisher{}, nil
 	}
 
-	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond)
+	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("expected nil error on context cancellation, got %v", err)
 	}
@@ -167,21 +167,35 @@ func TestWorkerRuntimeTransportFailureReconnects(t *testing.T) {
 	db := mockClaimDBExecutor{}
 
 	var setupAttempts atomic.Int32
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	var requestedWaits []time.Duration
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	mockSetup := func(rabbitURL string) (*amqp.Connection, *amqp.Channel, messaging.Publisher, error) {
-		setupAttempts.Add(1)
+		attempts := setupAttempts.Add(1)
+		if attempts >= 3 {
+			cancel()
+		}
 		return nil, nil, &fakeWorkerPublisher{failTransport: true}, nil
 	}
 
-	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond)
+	mockWait := func(c context.Context, d time.Duration) error {
+		requestedWaits = append(requestedWaits, d)
+		return c.Err()
+	}
+
+	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond, mockWait)
 	if err != nil {
 		t.Fatalf("expected clean exit on context cancel, got: %v", err)
 	}
 
 	if setupAttempts.Load() < 2 {
 		t.Errorf("expected reconnect setup to be invoked at least twice after transport failure, got %d", setupAttempts.Load())
+	}
+	if len(requestedWaits) == 0 {
+		t.Errorf("expected runtime reconnect to request non-zero delay")
+	} else if requestedWaits[0] != 5*time.Millisecond {
+		t.Errorf("expected first reconnect delay = 5ms, got %v", requestedWaits[0])
 	}
 }
 
@@ -200,7 +214,7 @@ func TestWorkerGracefulShutdownOnContextCancel(t *testing.T) {
 		return nil, nil, &fakeWorkerPublisher{}, nil
 	}
 
-	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond)
+	err := runWorkerLoop(ctx, cfg, db, logger, mockSetup, 5*time.Millisecond, nil)
 	if err != nil {
 		t.Fatalf("expected clean worker exit on immediate context cancel, got: %v", err)
 	}

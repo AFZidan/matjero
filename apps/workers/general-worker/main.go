@@ -55,7 +55,7 @@ func run(ctx context.Context) error {
 
 	logger.Info("worker connected to postgres", slog.String("service", cfg.ServiceName))
 
-	return runWorkerLoop(ctx, cfg, dbPool, logger, defaultSetupRabbit, 1*time.Second)
+	return runWorkerLoop(ctx, cfg, dbPool, logger, defaultSetupRabbit, 1*time.Second, waitContext)
 }
 
 func waitContext(ctx context.Context, d time.Duration) error {
@@ -69,9 +69,14 @@ func waitContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecutor, logger *slog.Logger, setupFn RabbitSetupFunc, initialBackoff time.Duration) error {
+type WaitFunc func(ctx context.Context, d time.Duration) error
+
+func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecutor, logger *slog.Logger, setupFn RabbitSetupFunc, initialBackoff time.Duration, waitFn WaitFunc) error {
 	if initialBackoff <= 0 {
 		initialBackoff = 1 * time.Second
+	}
+	if waitFn == nil {
+		waitFn = waitContext
 	}
 	backoff := initialBackoff
 	for {
@@ -85,7 +90,7 @@ func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecu
 		conn, ch, pub, err := setupFn(cfg.RabbitMQURL)
 		if err != nil {
 			logger.Error("rabbitmq connection failed, retrying...", slog.String("error", err.Error()), slog.Duration("backoff", backoff))
-			if waitErr := waitContext(ctx, backoff); waitErr != nil {
+			if waitErr := waitFn(ctx, backoff); waitErr != nil {
 				return nil
 			}
 			if backoff < 10*time.Second {
@@ -94,7 +99,6 @@ func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecu
 			continue
 		}
 
-		backoff = initialBackoff
 		logger.Info("worker connected to rabbitmq and confirmed topology")
 
 		proc := outbox.NewProcessor(cfg, dbPool, pub, logger)
@@ -112,7 +116,15 @@ func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecu
 		}
 
 		if err != nil {
-			logger.Warn("processor session stopped, reconnecting...", slog.String("error", err.Error()))
+			logger.Warn("processor session stopped, reconnecting...", slog.String("error", err.Error()), slog.Duration("backoff", backoff))
+			if waitErr := waitFn(ctx, backoff); waitErr != nil {
+				return nil
+			}
+			if backoff < 10*time.Second {
+				backoff *= 2
+			}
+		} else {
+			backoff = initialBackoff
 		}
 	}
 }

@@ -25,8 +25,14 @@ type Publisher interface {
 	PublishMessage(ctx context.Context, exchange, routingKey string, message events.MessageEnvelope) error
 }
 
+type ConfirmationWaiter interface {
+	WaitContext(ctx context.Context) (bool, error)
+}
+
 type RabbitPublisher struct {
-	channel *amqp.Channel
+	channel     *amqp.Channel
+	publishFunc func(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) (ConfirmationWaiter, error)
+	waitConfirm func(cw ConfirmationWaiter, ctx context.Context) (bool, error)
 }
 
 type rabbitPublication struct {
@@ -46,6 +52,18 @@ func NewRabbitPublisher(channel *amqp.Channel) (*RabbitPublisher, error) {
 		return nil, fmt.Errorf("%w: enable channel confirm mode: %v", ErrPublisherUnavailable, err)
 	}
 	return &RabbitPublisher{channel: channel}, nil
+}
+
+func NewRabbitPublisherWithSeamsForTest(
+	channel *amqp.Channel,
+	publishFunc func(ctx context.Context, exchange, routingKey string, msg amqp.Publishing) (ConfirmationWaiter, error),
+	waitConfirm func(cw ConfirmationWaiter, ctx context.Context) (bool, error),
+) *RabbitPublisher {
+	return &RabbitPublisher{
+		channel:     channel,
+		publishFunc: publishFunc,
+		waitConfirm: waitConfirm,
+	}
 }
 
 func (p *RabbitPublisher) PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error {
@@ -77,7 +95,7 @@ func (p *RabbitPublisher) PublishMessage(ctx context.Context, exchange, routingK
 }
 
 func (p *RabbitPublisher) publish(ctx context.Context, publication rabbitPublication) error {
-	if p.channel == nil || p.channel.IsClosed() {
+	if p.publishFunc == nil && (p.channel == nil || p.channel.IsClosed()) {
 		return fmt.Errorf("%w: rabbitmq channel is closed", ErrPublisherUnavailable)
 	}
 
@@ -86,35 +104,53 @@ func (p *RabbitPublisher) publish(ctx context.Context, publication rabbitPublica
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	confirmation, err := p.channel.PublishWithDeferredConfirmWithContext(
-		ctx,
-		publication.exchange,
-		publication.routingKey,
-		false,
-		false,
-		amqp.Publishing{
-			ContentType:   "application/json",
-			DeliveryMode:  amqp.Persistent,
-			MessageId:     publication.messageID,
-			Type:          publication.messageType,
-			CorrelationId: publication.correlationID,
-			Body:          body,
-		},
-	)
-	if err != nil {
-		if errors.Is(err, amqp.ErrClosed) || p.channel.IsClosed() {
-			return fmt.Errorf("%w: publish message: %v", ErrPublisherUnavailable, err)
+	msg := amqp.Publishing{
+		ContentType:   "application/json",
+		DeliveryMode:  amqp.Persistent,
+		MessageId:     publication.messageID,
+		Type:          publication.messageType,
+		CorrelationId: publication.correlationID,
+		Body:          body,
+	}
+
+	var confirmation ConfirmationWaiter
+	if p.publishFunc != nil {
+		c, err := p.publishFunc(ctx, publication.exchange, publication.routingKey, msg)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("publish message: %w", err)
+		confirmation = c
+	} else {
+		c, err := p.channel.PublishWithDeferredConfirmWithContext(
+			ctx,
+			publication.exchange,
+			publication.routingKey,
+			false,
+			false,
+			msg,
+		)
+		if err != nil {
+			if errors.Is(err, amqp.ErrClosed) || p.channel.IsClosed() {
+				return fmt.Errorf("%w: publish message: %v", ErrPublisherUnavailable, err)
+			}
+			return fmt.Errorf("publish message: %w", err)
+		}
+		if c == nil {
+			return fmt.Errorf("%w: channel is not in confirm mode", ErrPublisherUnavailable)
+		}
+		confirmation = c
 	}
 
-	if confirmation == nil {
-		return fmt.Errorf("%w: channel is not in confirm mode", ErrPublisherUnavailable)
+	waitFn := p.waitConfirm
+	if waitFn == nil {
+		waitFn = func(cw ConfirmationWaiter, ctx context.Context) (bool, error) {
+			return cw.WaitContext(ctx)
+		}
 	}
 
-	acked, err := confirmation.WaitContext(ctx)
+	acked, err := waitFn(confirmation, ctx)
 	if err != nil {
-		if errors.Is(err, amqp.ErrClosed) || p.channel.IsClosed() {
+		if errors.Is(err, amqp.ErrClosed) || (p.channel != nil && p.channel.IsClosed()) {
 			return fmt.Errorf("%w: wait publish confirm: %v", ErrPublisherUnavailable, err)
 		}
 		return fmt.Errorf("wait publish confirm: %w", err)

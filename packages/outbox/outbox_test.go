@@ -735,6 +735,14 @@ func TestOrderCreatedPublishedEnvelopeMatchesOutbox(t *testing.T) {
 		pubEnv.CausationID != env.CausationID {
 		t.Errorf("published envelope does not match outbox row: got %+v", pubEnv)
 	}
+	if !pubEnv.OccurredAt.Equal(env.OccurredAt) {
+		t.Errorf("OccurredAt mismatch: expected %v, got %v", env.OccurredAt, pubEnv.OccurredAt)
+	}
+	envPayloadJSON, _ := json.Marshal(env.Payload)
+	pubPayloadJSON, _ := json.Marshal(pubEnv.Payload)
+	if !bytes.Equal(envPayloadJSON, pubPayloadJSON) {
+		t.Errorf("Payload mismatch: expected %s, got %s", string(envPayloadJSON), string(pubPayloadJSON))
+	}
 }
 
 func TestOrderCreatedPublishedCorrelationPreserved(t *testing.T) {
@@ -983,6 +991,77 @@ func TestOutboxClaimBatchUsesSkipLocked(t *testing.T) {
 	}
 }
 
+func TestOutboxProcessorLongBatchRenewsNearExpiry(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	envA := sampleEnvelope()
+	envB := sampleEnvelope()
+
+	for _, env := range []events.EventEnvelope{envA, envB} {
+		tx, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		if err := store.Enqueue(ctx, tx, env); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+
+	var tBBefore, tBAfter time.Time
+	outbox.SetTestHookBeforeNextBatchEventForTest(func(claimID string, eventID string, remainingIDs []string) {
+		if eventID == envA.EventID {
+			// While event A is being processed, set event B near expiry: remaining lease = 5s (<= renewalMargin 10s)
+			_, err := db.Pool.Exec(ctx, `
+				UPDATE outbox_events
+				SET publish_claimed_at = clock_timestamp() - interval '25 seconds'
+				WHERE event_id = $1::uuid
+			`, envB.EventID)
+			if err != nil {
+				t.Fatalf("simulate near expiry for event B: %v", err)
+			}
+			_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, envB.EventID).Scan(&tBBefore)
+		} else if eventID == envB.EventID {
+			// When event B iteration reaches hook right after RenewBatchNearExpiry, capture renewed timestamp
+			_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, envB.EventID).Scan(&tBAfter)
+		}
+	})
+	t.Cleanup(func() {
+		outbox.ResetTestHookBeforeNextBatchEventForTest()
+	})
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	fakePub := &fakePublisher{}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("ProcessBatch error: %v", err)
+	}
+	if processed != 2 {
+		t.Fatalf("expected 2 events processed, got %d", processed)
+	}
+
+	fakePub.mu.Lock()
+	defer fakePub.mu.Unlock()
+	if len(fakePub.published) != 2 {
+		t.Fatalf("expected 2 published events, got %d", len(fakePub.published))
+	}
+
+	if tBBefore.IsZero() || tBAfter.IsZero() {
+		t.Fatalf("expected both tBBefore and tBAfter to be captured, got before=%v, after=%v", tBBefore, tBAfter)
+	}
+	if !tBAfter.After(tBBefore) {
+		t.Errorf("expected near-expiry batch event B publish_claimed_at to move forward, before=%v, after=%v", tBBefore, tBAfter)
+	}
+}
+
 func TestOutboxLostClaimSkipsNetworkPublish(t *testing.T) {
 	db, ctx := setupOutboxDB(t)
 	store := outbox.NewStore()
@@ -999,19 +1078,18 @@ func TestOutboxLostClaimSkipsNetworkPublish(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	claimID := uuid.NewString()
-	claimed, err := store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("claim batch failed: %v", err)
-	}
-
 	claimIDOther := uuid.NewString()
-	_, err = db.Pool.Exec(ctx, `
-		UPDATE outbox_events SET publish_claim_id = $1::uuid WHERE event_id = $2::uuid
-	`, claimIDOther, env.EventID)
-	if err != nil {
-		t.Fatalf("steal claim: %v", err)
-	}
+	outbox.SetTestHookAfterClaimBatchForTest(func(claimID string, eventIDs []string) {
+		_, err := db.Pool.Exec(ctx, `
+			UPDATE outbox_events SET publish_claim_id = $1::uuid WHERE event_id = $2::uuid
+		`, claimIDOther, env.EventID)
+		if err != nil {
+			t.Fatalf("steal claim in hook: %v", err)
+		}
+	})
+	t.Cleanup(func() {
+		outbox.ResetTestHookAfterClaimBatchForTest()
+	})
 
 	fakePub := &fakePublisher{}
 	cfg, err := config.Load("test-service")
@@ -1031,11 +1109,146 @@ func TestOutboxLostClaimSkipsNetworkPublish(t *testing.T) {
 	if pubCount != 0 {
 		t.Errorf("expected network publish call count = 0 on lost claim, got %d", pubCount)
 	}
+
+	var currentClaim string
+	var attempts int
+	var publishedAt *time.Time
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_claim_id::text, publish_attempts, published_at
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, env.EventID).Scan(&currentClaim, &attempts, &publishedAt)
+	if err != nil {
+		t.Fatalf("query event state: %v", err)
+	}
+	if currentClaim != claimIDOther {
+		t.Errorf("expected claim B (%s) to remain untouched owner, got %s", claimIDOther, currentClaim)
+	}
+	if attempts != 0 {
+		t.Errorf("expected publish_attempts = 0 (unmodified by stale owner), got %d", attempts)
+	}
+	if publishedAt != nil {
+		t.Errorf("expected published_at = NULL, got %v", publishedAt)
+	}
+}
+
+type errorPublisher struct {
+	err error
+}
+
+func (e *errorPublisher) PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error {
+	return e.err
+}
+
+func TestOutboxNACKSchedulesBackoff(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	env := sampleEnvelope()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := store.Enqueue(ctx, tx, env); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	nackPub := &errorPublisher{err: errors.New("rabbitmq publish nacked by broker for message_id " + env.EventID)}
+	proc := outbox.NewProcessor(cfg, db.Pool, nackPub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("expected ProcessBatch to return nil error on NACK (event-level backoff), got %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected 1 event processed, got %d", processed)
+	}
+
+	var attempts int
+	var claimID *string
+	var publishedAt *time.Time
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_attempts, publish_claim_id::text, published_at
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, env.EventID).Scan(&attempts, &claimID, &publishedAt)
+	if err != nil {
+		t.Fatalf("query event state: %v", err)
+	}
+
+	if attempts != 1 {
+		t.Errorf("expected publish_attempts = 1 after NACK backoff, got %d", attempts)
+	}
+	if claimID != nil {
+		t.Errorf("expected publish_claim_id = NULL after NACK backoff, got %v", *claimID)
+	}
+	if publishedAt != nil {
+		t.Errorf("expected published_at = NULL, got %v", *publishedAt)
+	}
+}
+
+func TestOutboxConfirmTimeoutBackoff(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	env := sampleEnvelope()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := store.Enqueue(ctx, tx, env); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	timeoutPub := &errorPublisher{err: context.DeadlineExceeded}
+	proc := outbox.NewProcessor(cfg, db.Pool, timeoutPub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("expected ProcessBatch to return nil error on confirm timeout (event-level backoff), got %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected 1 event processed, got %d", processed)
+	}
+
+	var attempts int
+	var claimID *string
+	var publishedAt *time.Time
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_attempts, publish_claim_id::text, published_at
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, env.EventID).Scan(&attempts, &claimID, &publishedAt)
+	if err != nil {
+		t.Fatalf("query event state: %v", err)
+	}
+
+	if attempts != 1 {
+		t.Errorf("expected publish_attempts = 1 after confirm timeout backoff, got %d", attempts)
+	}
+	if claimID != nil {
+		t.Errorf("expected publish_claim_id = NULL after confirm timeout backoff, got %v", *claimID)
+	}
+	if publishedAt != nil {
+		t.Errorf("expected published_at = NULL, got %v", *publishedAt)
+	}
 }
 
 func TestOutboxPayloadLargeInt64Precision(t *testing.T) {
 	db, ctx := setupOutboxDB(t)
-	store := outbox.NewStore()
 
 	largeIntStr := "9223372036854775800"
 	eventID := uuid.NewString()
@@ -1053,25 +1266,31 @@ func TestOutboxPayloadLargeInt64Precision(t *testing.T) {
 		t.Fatalf("insert large int64 payload: %v", err)
 	}
 
-	claimID := uuid.NewString()
-	_, err = store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
+	fakePub := &fakePublisher{}
+	cfg, err := config.Load("test-service")
 	if err != nil {
-		t.Fatalf("claim batch: %v", err)
+		t.Fatalf("load config: %v", err)
+	}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil || processed != 1 {
+		t.Fatalf("ProcessBatch expected 1, got %d (err: %v)", processed, err)
 	}
 
-	loaded, err := store.RenewAndLoadEvent(ctx, db.Pool, eventID, claimID, 30*time.Second)
-	if err != nil {
-		t.Fatalf("RenewAndLoadEvent error: %v", err)
+	fakePub.mu.Lock()
+	defer fakePub.mu.Unlock()
+	if len(fakePub.published) != 1 {
+		t.Fatalf("expected 1 published event, got %d", len(fakePub.published))
 	}
 
-	payloadJSON, err := json.Marshal(loaded.Payload)
+	pubPayloadJSON, err := json.Marshal(fakePub.published[0].Payload)
 	if err != nil {
-		t.Fatalf("marshal loaded payload: %v", err)
+		t.Fatalf("marshal published payload: %v", err)
 	}
-
-	if !bytes.Contains(payloadJSON, []byte(largeIntStr)) {
-		t.Errorf("expected marshaled payload to preserve exact large int64 string %s without precision loss, got %s",
-			largeIntStr, string(payloadJSON))
+	if !bytes.Contains(pubPayloadJSON, []byte(largeIntStr)) {
+		t.Errorf("expected published payload to preserve exact large int64 string %s without precision loss, got %s",
+			largeIntStr, string(pubPayloadJSON))
 	}
 }
 
