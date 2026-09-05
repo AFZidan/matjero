@@ -63,6 +63,7 @@ func setupCatalogTest(t *testing.T) catalogEnv {
 		"000008_storefront_revisions",
 		"000009_supplier_retail_capability",
 		"000010_customer_cart_domain",
+		"000011_checkout_sessions",
 	} {
 		applySQLFileStorefront(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))
 	}

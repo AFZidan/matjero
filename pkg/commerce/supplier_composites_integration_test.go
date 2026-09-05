@@ -33,6 +33,7 @@ func setupCompositeTest(t *testing.T) (context.Context, Repository, *database.Po
 		"000008_storefront_revisions",
 		"000009_supplier_retail_capability",
 		"000010_customer_cart_domain",
+		"000011_checkout_sessions",
 	} {
 		applyCompositeMigration(t, db, filepath.Join("..", "..", "migrations", name+".up.sql"))
 	}

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
@@ -20,6 +23,17 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ZitadelAudience != "admin-api" {
 		t.Fatalf("ZitadelAudience = %q", cfg.ZitadelAudience)
+	}
+	if cfg.CheckoutSessionLifetime != 30*time.Minute {
+		t.Fatalf("CheckoutSessionLifetime = %s", cfg.CheckoutSessionLifetime)
+	}
+}
+
+func TestLoadRejectsInvalidCheckoutSessionLifetime(t *testing.T) {
+	t.Setenv("CHECKOUT_SESSION_LIFETIME", "not-a-duration")
+
+	if _, err := Load("admin-api"); err == nil {
+		t.Fatal("expected invalid Checkout Session lifetime error")
 	}
 }
 

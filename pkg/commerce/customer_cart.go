@@ -84,9 +84,13 @@ type CartItem struct {
 }
 
 func generateBearerToken() (string, string, error) {
+	return generateCapability()
+}
+
+func generateCapability() (string, string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
-		return "", "", fmt.Errorf("generate cart capability: %w", err)
+		return "", "", fmt.Errorf("generate capability: %w", err)
 	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	digest := sha256.Sum256([]byte(token))

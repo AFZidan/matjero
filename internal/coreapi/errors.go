@@ -32,6 +32,8 @@ const (
 	CodePreviewUnavailable    = "preview_unavailable"
 	CodeStorefrontUnavailable = "storefront_unavailable"
 	CodeUnavailable           = "unavailable"
+	CodeCheckoutExpired       = "checkout_expired"
+	CodeIdempotencyConflict   = "idempotency_conflict"
 	CodeInternalError         = "internal_error"
 )
 
@@ -46,7 +48,7 @@ func statusFor(code string) int {
 		return http.StatusUnauthorized
 	case CodeForbidden:
 		return http.StatusForbidden
-	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory:
+	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict:
 		return http.StatusConflict
 	case CodeUnavailable, CodePreviewUnavailable:
 		return http.StatusServiceUnavailable
@@ -84,6 +86,10 @@ func messageFor(code string) string {
 		return "market mismatch"
 	case CodeInsufficientInventory:
 		return "insufficient inventory"
+	case CodeCheckoutExpired:
+		return "checkout session expired"
+	case CodeIdempotencyConflict:
+		return "checkout request conflicts with the finalized session"
 	case CodeSchemaMismatch:
 		return "configuration does not match the theme schema"
 	case CodeUnsafeContent:
@@ -138,6 +144,10 @@ func codeFor(err error) string {
 		errors.Is(err, themes.ErrConflict),
 		errors.Is(err, commerce.ErrCartExpired):
 		return CodeConflict
+	case errors.Is(err, commerce.ErrCheckoutExpired):
+		return CodeCheckoutExpired
+	case errors.Is(err, commerce.ErrIdempotencyConflict):
+		return CodeIdempotencyConflict
 	case errors.Is(err, commerce.ErrUnavailable):
 		return CodeUnavailable
 	case errors.Is(err, themes.ErrSchemaMismatch):
