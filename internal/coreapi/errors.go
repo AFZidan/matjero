@@ -19,23 +19,23 @@ import (
 // closed: adding a code is a contract change, and no code may ever carry SQL
 // text, a stack trace, an internal table name, or a secret value.
 const (
-	CodeNotFound              = "not_found"
-	CodeInvalidArgument       = "invalid_argument"
-	CodeValidationError       = "validation_error"
-	CodeUnauthorized          = "unauthorized"
-	CodeForbidden             = "forbidden"
-	CodeConflict              = "conflict"
-	CodeMarketMismatch        = "market_mismatch"
-	CodeInsufficientInventory = "insufficient_inventory"
-	CodeSchemaMismatch        = "schema_mismatch"
-	CodeUnsafeContent         = "unsafe_content"
-	CodePreviewUnavailable    = "preview_unavailable"
-	CodeStorefrontUnavailable = "storefront_unavailable"
-	CodeUnavailable           = "unavailable"
-	CodeCheckoutExpired       = "checkout_expired"
-	CodeIdempotencyConflict   = "idempotency_conflict"
+	CodeNotFound               = "not_found"
+	CodeInvalidArgument        = "invalid_argument"
+	CodeValidationError        = "validation_error"
+	CodeUnauthorized           = "unauthorized"
+	CodeForbidden              = "forbidden"
+	CodeConflict               = "conflict"
+	CodeMarketMismatch         = "market_mismatch"
+	CodeInsufficientInventory  = "insufficient_inventory"
+	CodeSchemaMismatch         = "schema_mismatch"
+	CodeUnsafeContent          = "unsafe_content"
+	CodePreviewUnavailable     = "preview_unavailable"
+	CodeStorefrontUnavailable  = "storefront_unavailable"
+	CodeUnavailable            = "unavailable"
+	CodeCheckoutExpired        = "checkout_expired"
+	CodeIdempotencyConflict    = "idempotency_conflict"
 	CodeInvalidOrderTransition = "invalid_order_transition"
-	CodeInternalError         = "internal_error"
+	CodeInternalError          = "internal_error"
 )
 
 // statusFor maps an internal error code onto its canonical HTTP status.
@@ -57,7 +57,6 @@ func statusFor(code string) int {
 		return http.StatusInternalServerError
 	}
 }
-
 
 // ErrorResponse is the internal error envelope. It intentionally reuses the
 // platform error shape so actor clients can decode it with the same struct they

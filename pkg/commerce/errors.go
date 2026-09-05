@@ -14,4 +14,3 @@ var (
 	ErrCheckoutCartInvariant = errors.New("checkout cart status invariant")
 	ErrInvalidTransition     = errors.New("invalid order transition")
 )
-

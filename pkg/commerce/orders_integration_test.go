@@ -71,7 +71,6 @@ func createTestLocationAndReservation(t *testing.T, db *database.Pool, ctx conte
 		t.Fatal(err)
 	}
 
-
 	snapID := uuid.NewString()
 	if _, err := db.Exec(ctx, `
 		INSERT INTO inventory_snapshots (id, sku_id, fulfillment_location_id, on_hand_qty, reserved_qty, version)
@@ -88,7 +87,6 @@ func createTestLocationAndReservation(t *testing.T, db *database.Pool, ctx conte
 	`, resID, resToken, snapID); err != nil {
 		t.Fatal(err)
 	}
-
 
 	return locID, resID
 }
@@ -291,7 +289,6 @@ func TestP53OrderItemConstraintsAndCurrencyIntegrity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-
 	locID, resID := createTestLocationAndReservation(t, db, ctx, store.ID, skuID)
 	orderNumber, _ := repo.AllocateOrderNumber(ctx, nil, store.ID)
 	now := time.Now().UTC()
@@ -350,7 +347,6 @@ func TestP53OrderItemConstraintsAndCurrencyIntegrity(t *testing.T) {
 	if _, err := db.Exec(ctx, `INSERT INTO supplier_offers (id, supplier_id, supplier_product_id, supplier_market_id, market_code, status) VALUES ($1, $2, $3, $4, 'EG', 'active')`, offerID, supplierID, suppProdID, suppMarketID); err != nil {
 		t.Fatal(err)
 	}
-
 
 	cost := int64(800)
 	costCurr := "EGP"
@@ -418,7 +414,6 @@ func TestP53OrderItemConstraintsAndCurrencyIntegrity(t *testing.T) {
 	`, resID2, resToken2, snapID); err != nil {
 		t.Fatal(err)
 	}
-
 
 	supplierBackedOrder := baseOrder
 	supplierBackedOrder.ID = uuid.NewString()
@@ -500,7 +495,6 @@ func TestP53OperationalLineageDeletionRestrictions(t *testing.T) {
 	if _, err := db.Exec(ctx, `INSERT INTO seller_listings (id, store_id, market_code, product_id, status) VALUES ($1, $2, 'EG', $3, 'active')`, listingID, store.ID, productID); err != nil {
 		t.Fatal(err)
 	}
-
 
 	supplierID := uuid.NewString()
 	if _, err := db.Exec(ctx, `INSERT INTO suppliers (id, code, name, status) VALUES ($1, $2, 'Supp', 'active')`, supplierID, "SUPP-"+suffix[:8]); err != nil {
@@ -775,4 +769,3 @@ func TestMigration000012_UpAndDown(t *testing.T) {
 		t.Fatalf("failed to re-apply migration 12 up: %v", err)
 	}
 }
-
