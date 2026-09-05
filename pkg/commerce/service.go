@@ -332,3 +332,27 @@ func (s Service) ResolveSellerIDForSubject(ctx context.Context, subject string) 
 	}
 	return seller.ID, nil
 }
+
+func (s Service) ConfirmOrder(ctx context.Context, storeID, orderID string, actorSubject *string, correlationID string) (Order, error) {
+	return s.repo.ConfirmOrder(ctx, nil, storeID, orderID, actorSubject, correlationID)
+}
+
+func (s Service) CancelPendingOrder(ctx context.Context, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	return s.repo.CancelPendingOrder(ctx, nil, storeID, orderID, authority, actorSubject, reason, correlationID)
+}
+
+func (s Service) CancelConfirmedOrder(ctx context.Context, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	return s.repo.CancelConfirmedOrder(ctx, nil, storeID, orderID, authority, actorSubject, reason, correlationID)
+}
+
+func (s Service) AdvanceOrderStatus(ctx context.Context, storeID, orderID string, targetStatus string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	return s.repo.AdvanceOrderStatus(ctx, nil, storeID, orderID, targetStatus, authority, actorSubject, reason, correlationID)
+}
+
+func (s Service) DiscoverExpiryCandidates(ctx context.Context, limit int) ([]string, error) {
+	return s.repo.DiscoverExpiryCandidates(ctx, nil, limit)
+}
+
+func (s Service) ExpirePendingOrder(ctx context.Context, orderID string) (Order, error) {
+	return s.repo.ExpirePendingOrder(ctx, nil, orderID)
+}
