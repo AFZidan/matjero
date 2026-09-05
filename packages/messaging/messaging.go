@@ -28,8 +28,14 @@ type rabbitPublication struct {
 	payload       any
 }
 
-func NewRabbitPublisher(channel *amqp.Channel) *RabbitPublisher {
-	return &RabbitPublisher{channel: channel}
+func NewRabbitPublisher(channel *amqp.Channel) (*RabbitPublisher, error) {
+	if channel == nil {
+		return nil, fmt.Errorf("rabbitmq channel is required")
+	}
+	if err := channel.Confirm(false); err != nil {
+		return nil, fmt.Errorf("enable channel confirm mode: %w", err)
+	}
+	return &RabbitPublisher{channel: channel}, nil
 }
 
 func (p *RabbitPublisher) PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error {
@@ -70,12 +76,36 @@ func (p *RabbitPublisher) publish(ctx context.Context, publication rabbitPublica
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	return p.channel.PublishWithContext(ctx, publication.exchange, publication.routingKey, false, false, amqp.Publishing{
-		ContentType:   "application/json",
-		DeliveryMode:  amqp.Persistent,
-		MessageId:     publication.messageID,
-		Type:          publication.messageType,
-		CorrelationId: publication.correlationID,
-		Body:          body,
-	})
+	confirmation, err := p.channel.PublishWithDeferredConfirmWithContext(
+		ctx,
+		publication.exchange,
+		publication.routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType:   "application/json",
+			DeliveryMode:  amqp.Persistent,
+			MessageId:     publication.messageID,
+			Type:          publication.messageType,
+			CorrelationId: publication.correlationID,
+			Body:          body,
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("publish message: %w", err)
+	}
+
+	if confirmation == nil {
+		return fmt.Errorf("channel is not in confirm mode")
+	}
+
+	acked, err := confirmation.WaitContext(ctx)
+	if err != nil {
+		return fmt.Errorf("wait publish confirm: %w", err)
+	}
+	if !acked {
+		return fmt.Errorf("rabbitmq publish nacked by broker for message_id %s", publication.messageID)
+	}
+
+	return nil
 }

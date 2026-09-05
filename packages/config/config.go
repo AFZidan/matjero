@@ -45,6 +45,12 @@ type Config struct {
 	InternalSellerToken   string
 	InternalAdminToken    string
 	InternalSupplierToken string
+
+	OutboxClaimLeaseDuration      time.Duration
+	OutboxClaimRenewalMargin      time.Duration
+	RabbitMQPublishConfirmTimeout time.Duration
+	OutboxBatchSize               int
+	OutboxPollInterval            time.Duration
 }
 
 func Load(serviceName string) (Config, error) {
@@ -63,6 +69,48 @@ func Load(serviceName string) (Config, error) {
 	orderConfirmationDuration, err := durationEnv("ORDER_CONFIRMATION_DURATION", 15*time.Minute)
 	if err != nil {
 		return Config{}, err
+	}
+	outboxClaimLeaseDuration, err := durationEnv("OUTBOX_CLAIM_LEASE_DURATION", 30*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	outboxClaimRenewalMargin, err := durationEnv("OUTBOX_CLAIM_RENEWAL_MARGIN", 10*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	rabbitMQPublishConfirmTimeout, err := durationEnv("RABBITMQ_PUBLISH_CONFIRM_TIMEOUT", 5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	outboxBatchSize, err := intEnv("OUTBOX_BATCH_SIZE", 50)
+	if err != nil {
+		return Config{}, err
+	}
+	outboxPollInterval, err := durationEnv("OUTBOX_POLL_INTERVAL", 500*time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
+
+	if outboxClaimLeaseDuration <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_CLAIM_LEASE_DURATION must be greater than zero")
+	}
+	if outboxClaimRenewalMargin <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_CLAIM_RENEWAL_MARGIN must be greater than zero")
+	}
+	if outboxClaimRenewalMargin >= outboxClaimLeaseDuration {
+		return Config{}, fmt.Errorf("OUTBOX_CLAIM_RENEWAL_MARGIN must be less than OUTBOX_CLAIM_LEASE_DURATION")
+	}
+	if rabbitMQPublishConfirmTimeout <= 0 {
+		return Config{}, fmt.Errorf("RABBITMQ_PUBLISH_CONFIRM_TIMEOUT must be greater than zero")
+	}
+	if rabbitMQPublishConfirmTimeout >= outboxClaimLeaseDuration {
+		return Config{}, fmt.Errorf("RABBITMQ_PUBLISH_CONFIRM_TIMEOUT must be less than OUTBOX_CLAIM_LEASE_DURATION")
+	}
+	if outboxBatchSize <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_BATCH_SIZE must be greater than zero")
+	}
+	if outboxPollInterval <= 0 {
+		return Config{}, fmt.Errorf("OUTBOX_POLL_INTERVAL must be greater than zero")
 	}
 
 	return Config{
@@ -86,6 +134,12 @@ func Load(serviceName string) (Config, error) {
 		InternalSellerToken:   stringEnv("CORE_INTERNAL_SELLER_TOKEN", ""),
 		InternalAdminToken:    stringEnv("CORE_INTERNAL_ADMIN_TOKEN", ""),
 		InternalSupplierToken: stringEnv("CORE_INTERNAL_SUPPLIER_TOKEN", ""),
+
+		OutboxClaimLeaseDuration:      outboxClaimLeaseDuration,
+		OutboxClaimRenewalMargin:      outboxClaimRenewalMargin,
+		RabbitMQPublishConfirmTimeout: rabbitMQPublishConfirmTimeout,
+		OutboxBatchSize:               outboxBatchSize,
+		OutboxPollInterval:            outboxPollInterval,
 	}, nil
 }
 

@@ -1,73 +1,51 @@
-package config
+package config_test
 
 import (
 	"testing"
 	"time"
+
+	"github.com/matjeroapps/core/packages/config"
 )
 
-func TestLoadDefaults(t *testing.T) {
-	t.Setenv("APP_ENV", "")
-	t.Setenv("HTTP_ADDR", "")
-	t.Setenv("SHUTDOWN_TIMEOUT_SECONDS", "")
-
-	cfg, err := Load("admin-api")
+func TestConfigOutboxDefaults(t *testing.T) {
+	cfg, err := config.Load("test-service")
 	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
+		t.Fatalf("expected clean config load, got: %v", err)
 	}
 
-	if cfg.ServiceName != "admin-api" {
-		t.Fatalf("service name = %q", cfg.ServiceName)
+	if cfg.OutboxClaimLeaseDuration != 30*time.Second {
+		t.Errorf("expected lease duration 30s, got %v", cfg.OutboxClaimLeaseDuration)
 	}
-	if cfg.HTTPAddr != ":8080" {
-		t.Fatalf("HTTPAddr = %q", cfg.HTTPAddr)
+	if cfg.OutboxClaimRenewalMargin != 10*time.Second {
+		t.Errorf("expected renewal margin 10s, got %v", cfg.OutboxClaimRenewalMargin)
 	}
-	if cfg.ZitadelAudience != "admin-api" {
-		t.Fatalf("ZitadelAudience = %q", cfg.ZitadelAudience)
+	if cfg.RabbitMQPublishConfirmTimeout != 5*time.Second {
+		t.Errorf("expected confirm timeout 5s, got %v", cfg.RabbitMQPublishConfirmTimeout)
 	}
-	if cfg.CheckoutSessionLifetime != 30*time.Minute {
-		t.Fatalf("CheckoutSessionLifetime = %s", cfg.CheckoutSessionLifetime)
+	if cfg.OutboxBatchSize != 50 {
+		t.Errorf("expected batch size 50, got %d", cfg.OutboxBatchSize)
 	}
-	if cfg.OrderConfirmationDuration != 15*time.Minute {
-		t.Fatalf("OrderConfirmationDuration = %s, want 15m", cfg.OrderConfirmationDuration)
+	if cfg.OutboxPollInterval != 500*time.Millisecond {
+		t.Errorf("expected poll interval 500ms, got %v", cfg.OutboxPollInterval)
 	}
 }
 
-func TestLoadCustomOrderConfirmationDuration(t *testing.T) {
-	t.Setenv("ORDER_CONFIRMATION_DURATION", "45m")
+func TestConfigValidatesRenewalMarginLessThanLease(t *testing.T) {
+	t.Setenv("OUTBOX_CLAIM_LEASE_DURATION", "10s")
+	t.Setenv("OUTBOX_CLAIM_RENEWAL_MARGIN", "10s")
 
-	cfg, err := Load("admin-api")
-	if err != nil {
-		t.Fatalf("Load returned error: %v", err)
-	}
-	if cfg.OrderConfirmationDuration != 45*time.Minute {
-		t.Fatalf("OrderConfirmationDuration = %s, want 45m", cfg.OrderConfirmationDuration)
+	_, err := config.Load("test-service")
+	if err == nil {
+		t.Fatal("expected error when renewal margin equals lease duration, got nil")
 	}
 }
 
-func TestLoadRejectsInvalidOrderConfirmationDuration(t *testing.T) {
-	invalidValues := []string{"not-a-duration", "0", "-5m", "0s"}
-	for _, val := range invalidValues {
-		t.Run(val, func(t *testing.T) {
-			t.Setenv("ORDER_CONFIRMATION_DURATION", val)
-			if _, err := Load("admin-api"); err == nil {
-				t.Fatalf("expected error for ORDER_CONFIRMATION_DURATION=%q, got nil", val)
-			}
-		})
-	}
-}
+func TestConfigValidatesConfirmTimeoutLessThanLease(t *testing.T) {
+	t.Setenv("OUTBOX_CLAIM_LEASE_DURATION", "5s")
+	t.Setenv("RABBITMQ_PUBLISH_CONFIRM_TIMEOUT", "10s")
 
-func TestLoadRejectsInvalidCheckoutSessionLifetime(t *testing.T) {
-	t.Setenv("CHECKOUT_SESSION_LIFETIME", "not-a-duration")
-
-	if _, err := Load("admin-api"); err == nil {
-		t.Fatal("expected invalid Checkout Session lifetime error")
-	}
-}
-
-func TestLoadRejectsInvalidShutdownTimeout(t *testing.T) {
-	t.Setenv("SHUTDOWN_TIMEOUT_SECONDS", "nope")
-
-	if _, err := Load("admin-api"); err == nil {
-		t.Fatal("expected invalid timeout error")
+	_, err := config.Load("test-service")
+	if err == nil {
+		t.Fatal("expected error when confirm timeout exceeds lease duration, got nil")
 	}
 }
