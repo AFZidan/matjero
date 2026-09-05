@@ -19,22 +19,23 @@ import (
 // closed: adding a code is a contract change, and no code may ever carry SQL
 // text, a stack trace, an internal table name, or a secret value.
 const (
-	CodeNotFound              = "not_found"
-	CodeInvalidArgument       = "invalid_argument"
-	CodeValidationError       = "validation_error"
-	CodeUnauthorized          = "unauthorized"
-	CodeForbidden             = "forbidden"
-	CodeConflict              = "conflict"
-	CodeMarketMismatch        = "market_mismatch"
-	CodeInsufficientInventory = "insufficient_inventory"
-	CodeSchemaMismatch        = "schema_mismatch"
-	CodeUnsafeContent         = "unsafe_content"
-	CodePreviewUnavailable    = "preview_unavailable"
-	CodeStorefrontUnavailable = "storefront_unavailable"
-	CodeUnavailable           = "unavailable"
-	CodeCheckoutExpired       = "checkout_expired"
-	CodeIdempotencyConflict   = "idempotency_conflict"
-	CodeInternalError         = "internal_error"
+	CodeNotFound               = "not_found"
+	CodeInvalidArgument        = "invalid_argument"
+	CodeValidationError        = "validation_error"
+	CodeUnauthorized           = "unauthorized"
+	CodeForbidden              = "forbidden"
+	CodeConflict               = "conflict"
+	CodeMarketMismatch         = "market_mismatch"
+	CodeInsufficientInventory  = "insufficient_inventory"
+	CodeSchemaMismatch         = "schema_mismatch"
+	CodeUnsafeContent          = "unsafe_content"
+	CodePreviewUnavailable     = "preview_unavailable"
+	CodeStorefrontUnavailable  = "storefront_unavailable"
+	CodeUnavailable            = "unavailable"
+	CodeCheckoutExpired        = "checkout_expired"
+	CodeIdempotencyConflict    = "idempotency_conflict"
+	CodeInvalidOrderTransition = "invalid_order_transition"
+	CodeInternalError          = "internal_error"
 )
 
 // statusFor maps an internal error code onto its canonical HTTP status.
@@ -48,7 +49,7 @@ func statusFor(code string) int {
 		return http.StatusUnauthorized
 	case CodeForbidden:
 		return http.StatusForbidden
-	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict:
+	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict, CodeInvalidOrderTransition:
 		return http.StatusConflict
 	case CodeUnavailable, CodePreviewUnavailable:
 		return http.StatusServiceUnavailable
@@ -90,7 +91,10 @@ func messageFor(code string) string {
 		return "checkout session expired"
 	case CodeIdempotencyConflict:
 		return "checkout request conflicts with the finalized session"
+	case CodeInvalidOrderTransition:
+		return "invalid order transition"
 	case CodeSchemaMismatch:
+
 		return "configuration does not match the theme schema"
 	case CodeUnsafeContent:
 		return "configuration contains prohibited executable content"
@@ -148,6 +152,8 @@ func codeFor(err error) string {
 		return CodeCheckoutExpired
 	case errors.Is(err, commerce.ErrIdempotencyConflict):
 		return CodeIdempotencyConflict
+	case errors.Is(err, commerce.ErrInvalidTransition):
+		return CodeInvalidOrderTransition
 	case errors.Is(err, commerce.ErrUnavailable):
 		return CodeUnavailable
 	case errors.Is(err, themes.ErrSchemaMismatch):
