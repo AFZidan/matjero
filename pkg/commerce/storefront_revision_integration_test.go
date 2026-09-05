@@ -65,6 +65,8 @@ func setupRevisionTest(t *testing.T) *revisionEnv {
 		"000005_store_domain_lifecycle",
 		"000006_store_domain_integrity",
 		"000008_storefront_revisions",
+		"000009_supplier_retail_capability",
+		"000010_customer_cart_domain",
 	} {
 		applySQLFile(t, db, filepath.Join("..", "..", "migrations", m+".up.sql"))
 	}

@@ -101,6 +101,40 @@ type FulfillmentLocationCreateRequest struct {
 	Status           string `json:"status"`
 }
 
+// StoreFulfillmentLocationCreateRequest creates Store-owned inventory space;
+// source ownership is derived from the authorized Store path.
+type StoreFulfillmentLocationCreateRequest struct {
+	Code         string `json:"code"`
+	Name         string `json:"name"`
+	LocationType string `json:"location_type"`
+	Status       string `json:"status"`
+}
+
+type CartCreateRequest struct{}
+
+type CartAddItemRequest struct {
+	SKUID    string `json:"sku_id"`
+	Quantity int64  `json:"quantity"`
+}
+
+// CartLineResponse intentionally omits seller/source identity. The resolved
+// Listing is Core-owned persistence state, not public/browser authority.
+type CartLineResponse struct {
+	ID                     string `json:"id"`
+	SKUID                  string `json:"sku_id"`
+	Quantity               int64  `json:"quantity"`
+	ExpectedUnitPriceMinor int64  `json:"unit_price_minor"`
+	ExpectedCurrencyCode   string `json:"currency_code"`
+}
+
+type CartResponse struct {
+	ID         string             `json:"id"`
+	Status     string             `json:"status"`
+	MarketCode string             `json:"market_code"`
+	CartToken  string             `json:"cart_token,omitempty"`
+	Items      []CartLineResponse `json:"items"`
+}
+
 // TranslationInput is a localized product name/description.
 type TranslationInput struct {
 	Locale      string `json:"locale"`

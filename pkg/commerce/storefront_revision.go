@@ -42,6 +42,13 @@ const inventoryListingStores = `
 	JOIN skus sk ON sk.id = inv.sku_id
 	JOIN variants v ON v.id = sk.variant_id
 	JOIN seller_listings sl ON sl.product_id = v.product_id
+	LEFT JOIN supplier_offers so ON so.id = sl.supplier_offer_id
+	JOIN fulfillment_locations fl ON fl.id = inv.fulfillment_location_id
+		AND (
+			(sl.supplier_offer_id IS NULL AND fl.store_id = sl.store_id AND fl.supplier_id IS NULL)
+			OR
+			(sl.supplier_offer_id IS NOT NULL AND fl.store_id IS NULL AND fl.supplier_id = so.supplier_id)
+		)
 `
 
 // Store selectors keyed by the identifier of the mutated record. They are

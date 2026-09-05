@@ -727,6 +727,33 @@ func (r Repository) CreateFulfillmentLocation(ctx context.Context, supplierID, s
 	return created, err
 }
 
+// CreateStoreFulfillmentLocation creates the Seller-owned branch of a
+// fulfillment location. The Store/Market composite FK and ownership CHECK are
+// enforced by PostgreSQL; this method intentionally does not accept supplier
+// identity.
+func (r Repository) CreateStoreFulfillmentLocation(ctx context.Context, storeID, marketCode, code, name, locationType, status string) (FulfillmentLocation, error) {
+	if storeID == "" || marketCode == "" || code == "" || name == "" || locationType == "" || status == "" {
+		return FulfillmentLocation{}, ErrInvalidInput
+	}
+
+	var created FulfillmentLocation
+	err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+		id := uuid.NewString()
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO fulfillment_locations (id, store_id, market_code, code, name, location_type, status)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id, store_id, market_code, code, name, location_type, status, created_at, updated_at
+		`, id, storeID, marketCode, code, name, locationType, status).Scan(
+			&created.ID, &created.StoreID, &created.MarketCode, &created.Code,
+			&created.Name, &created.LocationType, &created.Status, &created.CreatedAt, &created.UpdatedAt,
+		); err != nil {
+			return translatePGError(err, "create store fulfillment location")
+		}
+		return nil
+	})
+	return created, err
+}
+
 func (r Repository) CreateInventorySnapshot(ctx context.Context, fulfillmentLocationID, skuID string, onHandQty int64) (InventorySnapshot, error) {
 	if fulfillmentLocationID == "" || skuID == "" || onHandQty < 0 {
 		return InventorySnapshot{}, ErrInvalidInput

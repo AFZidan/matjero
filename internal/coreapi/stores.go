@@ -124,6 +124,26 @@ func (s *server) handleImportSellerListing(w http.ResponseWriter, r *http.Reques
 	httpx.WriteJSON(w, http.StatusCreated, listing)
 }
 
+func (s *server) handleCreateStoreLocation(w http.ResponseWriter, r *http.Request) {
+	subject := serviceauth.SubjectFrom(r)
+	if subject == "" {
+		writeError(w, CodeInvalidArgument)
+		return
+	}
+	var body StoreFulfillmentLocationCreateRequest
+	if !decodeJSON(w, r, &body) {
+		return
+	}
+	location, err := s.deps.Commerce.CreateStoreFulfillmentLocationForSubject(
+		r.Context(), subject, chi.URLParam(r, "storeID"), body.Code, body.Name, body.LocationType, body.Status,
+	)
+	if err != nil {
+		writeDomainError(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, location)
+}
+
 // authorizeStore loads a store and verifies the caller may act on it.
 func (s *server) authorizeStore(w http.ResponseWriter, r *http.Request) (commerce.Store, bool) {
 	store, err := s.deps.Repo.GetStore(r.Context(), chi.URLParam(r, "storeID"))

@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/matjeroapps/core/pkg/catalog"
 )
 
 // CatalogRepository is the store-scoped public read model for the native
@@ -45,34 +47,23 @@ func readError(err error, action string) error {
 	return fmt.Errorf("%s: %w", action, err)
 }
 
-// eligibleListings is the single definition of "publicly sellable in this store".
-// It is shared by every read below so no operation can accidentally apply a
-// weaker rule: the listing, its product, and its supplier offer (when the
-// listing is supplier-backed) must all be active; the listing must have a
-// current seller price; and the listing market must equal the store market.
-//
-// DISTINCT ON collapses a product that has more than one listing row in the same
-// store to its newest listing, so browse pages cannot show duplicates.
-//
+// eligibleListings is the public projection over the shared Core-owned
+// canonical Listing primitive. Its source-aware inventory predicate is applied
+// to that selected Listing, never to an arbitrary Listing for the Product.
 // $1 store id, $2 market code, $3 locale, $4 fallback locale.
 const eligibleListings = `
-	SELECT DISTINCT ON (p.id)
-		p.id                                            AS product_id,
-		p.slug                                          AS product_slug,
-		p.created_at                                    AS product_created_at,
-		slp.amount_minor                                AS price_minor,
-		slp.currency_code                               AS price_currency,
-		COALESCE(t.name, tf.name, p.slug)               AS name,
-		COALESCE(t.description, tf.description, '')      AS description,
-		(stock.in_stock AND COALESCE(soa.is_available, true)) AS in_stock
-	FROM seller_listings sl
-	JOIN products p ON p.id = sl.product_id
-	JOIN seller_listing_prices slp
-		ON slp.seller_listing_id = sl.id AND slp.is_current = true
-	LEFT JOIN supplier_offers so ON so.id = sl.supplier_offer_id
-	LEFT JOIN supplier_offer_availability soa ON soa.supplier_offer_id = so.id
-	LEFT JOIN product_translations t ON t.product_id = p.id AND t.locale = $3
-	LEFT JOIN product_translations tf ON tf.product_id = p.id AND tf.locale = $4
+	SELECT
+		l.product_id,
+		l.product_slug,
+		l.product_created_at,
+		COALESCE(t.name, tf.name, l.product_slug) AS name,
+		COALESCE(t.description, tf.description, '') AS description,
+		l.price_minor,
+		l.price_currency,
+		(l.supplier_available AND COALESCE(stock.in_stock, false)) AS in_stock
+	FROM (` + catalog.CanonicalListingSQL + `) l
+	LEFT JOIN product_translations t ON t.product_id = l.product_id AND t.locale = $3
+	LEFT JOIN product_translations tf ON tf.product_id = l.product_id AND tf.locale = $4
 	LEFT JOIN LATERAL (
 		SELECT EXISTS (
 			SELECT 1
@@ -82,18 +73,16 @@ const eligibleListings = `
 			JOIN fulfillment_locations fl
 				ON fl.id = inv.fulfillment_location_id
 				AND fl.status = 'active'
-				AND fl.market_code = $2
-			WHERE v.product_id = p.id
-				AND v.status = 'active'
+				AND fl.market_code = l.market_code
+			WHERE v.product_id = l.product_id
+				AND (
+					(l.supplier_offer_id IS NULL AND fl.store_id = l.store_id AND fl.supplier_id IS NULL)
+					OR
+					(l.supplier_offer_id IS NOT NULL AND fl.store_id IS NULL AND fl.supplier_id = l.supplier_id)
+				)
 				AND (inv.on_hand_qty - inv.reserved_qty) > 0
 		) AS in_stock
 	) stock ON true
-	WHERE sl.store_id = $1
-		AND sl.market_code = $2
-		AND sl.status = 'active'
-		AND p.status = 'active'
-		AND (sl.supplier_offer_id IS NULL OR (so.status = 'active' AND so.market_code = $2))
-	ORDER BY p.id, sl.created_at DESC, sl.id DESC
 `
 
 func (s CatalogScope) baseArgs() []any {
@@ -551,11 +540,13 @@ func (r CatalogRepository) productCategories(ctx context.Context, scope CatalogS
 // handle.
 func (r CatalogRepository) productVariants(ctx context.Context, scope CatalogScope, productID string) ([]PublicVariant, error) {
 	rows, err := r.pool.Query(ctx, `
+		WITH listing AS (`+catalog.CanonicalListingSQL+`)
 		SELECT
 			v.code,
 			sk.id,
-			COALESCE(stock.in_stock, false)
+			(l.supplier_available AND COALESCE(stock.in_stock, false))
 		FROM variants v
+		JOIN listing l ON l.product_id = v.product_id
 		LEFT JOIN skus sk ON sk.variant_id = v.id AND sk.status = 'active'
 		LEFT JOIN LATERAL (
 			SELECT EXISTS (
@@ -564,13 +555,19 @@ func (r CatalogRepository) productVariants(ctx context.Context, scope CatalogSco
 				JOIN fulfillment_locations fl
 					ON fl.id = inv.fulfillment_location_id
 					AND fl.status = 'active'
-					AND fl.market_code = $2
-				WHERE inv.sku_id = sk.id AND (inv.on_hand_qty - inv.reserved_qty) > 0
+					AND fl.market_code = l.market_code
+				WHERE inv.sku_id = sk.id
+					AND (
+						(l.supplier_offer_id IS NULL AND fl.store_id = l.store_id AND fl.supplier_id IS NULL)
+						OR
+						(l.supplier_offer_id IS NOT NULL AND fl.store_id IS NULL AND fl.supplier_id = l.supplier_id)
+					)
+					AND (inv.on_hand_qty - inv.reserved_qty) > 0
 			) AS in_stock
 		) stock ON true
-		WHERE v.product_id = $1 AND v.status = 'active'
+		WHERE v.product_id = $3 AND v.status = 'active'
 		ORDER BY v.code ASC, sk.id ASC
-	`, productID, scope.marketCode)
+	`, scope.storeID, scope.marketCode, productID)
 	if err != nil {
 		return nil, readError(err, "list public product variants")
 	}

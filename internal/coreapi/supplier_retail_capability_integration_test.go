@@ -34,6 +34,7 @@ func setupSupplierRetailAPI(t *testing.T) (context.Context, commerce.Repository,
 	applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", "000007_theme_engine_schema.up.sql"))
 	applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", "000008_storefront_revisions.up.sql"))
 	applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", "000009_supplier_retail_capability.up.sql"))
+	applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", "000010_customer_cart_domain.up.sql"))
 
 	repo := commerce.NewRepository(db.Pool)
 	svc := commerce.NewService(repo)

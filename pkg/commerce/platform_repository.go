@@ -226,7 +226,7 @@ func (r Repository) ListFulfillmentLocations(ctx context.Context, supplierID str
 	}
 	page = normalizePage(page)
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, supplier_id, supplier_market_id, market_code, code, name, location_type, status, created_at, updated_at
+		SELECT id, COALESCE(supplier_id::text, ''), COALESCE(store_id::text, ''), COALESCE(supplier_market_id::text, ''), market_code, code, name, location_type, status, created_at, updated_at
 		FROM fulfillment_locations
 		WHERE supplier_id = $1
 		ORDER BY created_at DESC, id DESC
@@ -239,7 +239,7 @@ func (r Repository) ListFulfillmentLocations(ctx context.Context, supplierID str
 	var locations []FulfillmentLocation
 	for rows.Next() {
 		var item FulfillmentLocation
-		if err := rows.Scan(&item.ID, &item.SupplierID, &item.SupplierMarketID, &item.MarketCode, &item.Code, &item.Name, &item.LocationType, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.SupplierID, &item.StoreID, &item.SupplierMarketID, &item.MarketCode, &item.Code, &item.Name, &item.LocationType, &item.Status, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan fulfillment location: %w", err)
 		}
 		locations = append(locations, item)
@@ -390,10 +390,10 @@ func (r Repository) GetFulfillmentLocationByID(ctx context.Context, locationID s
 
 	var location FulfillmentLocation
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, supplier_id, supplier_market_id, market_code, code, name, location_type, status, created_at, updated_at
+		SELECT id, COALESCE(supplier_id::text, ''), COALESCE(store_id::text, ''), COALESCE(supplier_market_id::text, ''), market_code, code, name, location_type, status, created_at, updated_at
 		FROM fulfillment_locations
 		WHERE id = $1
-	`, locationID).Scan(&location.ID, &location.SupplierID, &location.SupplierMarketID, &location.MarketCode, &location.Code, &location.Name, &location.LocationType, &location.Status, &location.CreatedAt, &location.UpdatedAt)
+	`, locationID).Scan(&location.ID, &location.SupplierID, &location.StoreID, &location.SupplierMarketID, &location.MarketCode, &location.Code, &location.Name, &location.LocationType, &location.Status, &location.CreatedAt, &location.UpdatedAt)
 	if err != nil {
 		return FulfillmentLocation{}, translatePGError(err, "get fulfillment location")
 	}

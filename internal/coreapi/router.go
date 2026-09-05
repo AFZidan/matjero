@@ -100,6 +100,18 @@ func NewRouter(deps Dependencies) chi.Router {
 			r.Get("/storefront/products", server.handleStorefrontProducts)
 			r.Get("/storefront/products/{slug}", server.handleStorefrontProduct)
 			r.Get("/storefront/search", server.handleStorefrontSearch)
+			r.Post("/storefront/carts", server.handleCreateCart)
+			r.Get("/storefront/carts", server.handleGetCart)
+			r.Post("/storefront/carts/items", server.handleAddCartItem)
+			r.Patch("/storefront/carts/items/{itemID}", server.handleUpdateCartItem)
+			r.Delete("/storefront/carts/items/{itemID}", server.handleRemoveCartItem)
+		})
+
+		// Store-owned fulfillment locations. Seller identity is resolved from the
+		// forwarded subject and the Store path; no body field can choose ownership.
+		r.Group(func(r chi.Router) {
+			r.Use(requireCallers(serviceauth.CallerSeller))
+			r.Post("/stores/{storeID}/locations", server.handleCreateStoreLocation)
 		})
 
 		// Seller capabilities.
