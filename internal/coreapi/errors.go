@@ -35,6 +35,8 @@ const (
 	CodeCheckoutExpired        = "checkout_expired"
 	CodeIdempotencyConflict    = "idempotency_conflict"
 	CodeInvalidOrderTransition = "invalid_order_transition"
+	CodePriceChanged           = "price_changed"
+	CodeListingUnavailable     = "listing_unavailable"
 	CodeInternalError          = "internal_error"
 )
 
@@ -49,7 +51,7 @@ func statusFor(code string) int {
 		return http.StatusUnauthorized
 	case CodeForbidden:
 		return http.StatusForbidden
-	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict, CodeInvalidOrderTransition:
+	case CodeConflict, CodeMarketMismatch, CodeInsufficientInventory, CodeCheckoutExpired, CodeIdempotencyConflict, CodeInvalidOrderTransition, CodePriceChanged, CodeListingUnavailable:
 		return http.StatusConflict
 	case CodeUnavailable, CodePreviewUnavailable:
 		return http.StatusServiceUnavailable
@@ -93,6 +95,10 @@ func messageFor(code string) string {
 		return "checkout request conflicts with the finalized session"
 	case CodeInvalidOrderTransition:
 		return "invalid order transition"
+	case CodePriceChanged:
+		return "price changed"
+	case CodeListingUnavailable:
+		return "listing unavailable"
 	case CodeSchemaMismatch:
 
 		return "configuration does not match the theme schema"
@@ -154,6 +160,10 @@ func codeFor(err error) string {
 		return CodeIdempotencyConflict
 	case errors.Is(err, commerce.ErrInvalidTransition):
 		return CodeInvalidOrderTransition
+	case errors.Is(err, commerce.ErrPriceChanged):
+		return CodePriceChanged
+	case errors.Is(err, commerce.ErrListingUnavailable):
+		return CodeListingUnavailable
 	case errors.Is(err, commerce.ErrUnavailable):
 		return CodeUnavailable
 	case errors.Is(err, themes.ErrSchemaMismatch):

@@ -17,6 +17,8 @@ const (
 	OrderStatusReturned         = "returned"
 )
 
+const DefaultConfirmationDuration = 15 * time.Minute
+
 type TransitionAuthority string
 
 const (

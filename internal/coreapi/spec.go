@@ -285,11 +285,11 @@ func internalRoutes() []openapi.RouteSpec {
 			Responses:   createResponses("Checkout Session and one-time capability", CheckoutSessionResponse{}),
 		},
 		{
-			Method: http.MethodPost, Path: "/internal/v1/storefront/checkout-sessions/{sessionID}/finalize", OperationID: "internalEvaluateCheckoutSession",
-			Summary: "Evaluate Checkout Session finalization semantics", Tags: []string{"Storefront"},
-			Description: "Locks the Checkout Session and Cart, captures the lock-linearized expiry decision, and computes the server-side fingerprint. This P5.2 operation creates no Order or reservation.",
+			Method: http.MethodPost, Path: "/internal/v1/storefront/checkout-sessions/{sessionID}/finalize", OperationID: "internalFinalizeCheckoutSession",
+			Summary: "Finalize Checkout Session atomically", Tags: []string{"Storefront"},
+			Description: "Executes atomic single-transaction checkout finalization turning an eligible Checkout Session and Cart into an Order.",
 			Parameters:  []openapi.ParameterSpec{pathParam("sessionID", "Checkout Session identifier")},
-			RequestBody: CheckoutFinalizeRequest{}, Responses: writeResponses("Checkout decision", CheckoutDecisionResponse{}),
+			RequestBody: CheckoutFinalizeRequest{}, Responses: writeResponses("Finalized Order", commerce.PublicOrder{}),
 		},
 
 		// --- Sellers ---
