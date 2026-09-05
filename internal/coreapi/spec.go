@@ -277,6 +277,20 @@ func internalRoutes() []openapi.RouteSpec {
 			Parameters: []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}, pathParam("itemID", "Cart item identifier")},
 			Responses:  writeResponses("Cart", CartResponse{}),
 		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/storefront/checkout-sessions", OperationID: "internalCreateCheckoutSession",
+			Summary: "Create a host-scoped Checkout Session", Tags: []string{"Storefront"},
+			Description: "Creates an open Guest Checkout Session and returns its one-time guest Order capability. The capability digest is never returned.",
+			Parameters:  []openapi.ParameterSpec{{Name: HeaderCartToken, In: "header", Required: true, Description: "Opaque Cart bearer capability", Schema: ""}},
+			Responses:   createResponses("Checkout Session and one-time capability", CheckoutSessionResponse{}),
+		},
+		{
+			Method: http.MethodPost, Path: "/internal/v1/storefront/checkout-sessions/{sessionID}/finalize", OperationID: "internalEvaluateCheckoutSession",
+			Summary: "Evaluate Checkout Session finalization semantics", Tags: []string{"Storefront"},
+			Description: "Locks the Checkout Session and Cart, captures the lock-linearized expiry decision, and computes the server-side fingerprint. This P5.2 operation creates no Order or reservation.",
+			Parameters:  []openapi.ParameterSpec{pathParam("sessionID", "Checkout Session identifier")},
+			RequestBody: CheckoutFinalizeRequest{}, Responses: writeResponses("Checkout decision", CheckoutDecisionResponse{}),
+		},
 
 		// --- Sellers ---
 		{

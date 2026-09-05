@@ -9,4 +9,7 @@ var (
 	ErrInsufficientInventory = errors.New("insufficient inventory")
 	ErrInvalidInput          = errors.New("invalid input")
 	ErrUnavailable           = errors.New("service unavailable")
+	ErrCheckoutExpired       = errors.New("checkout expired")
+	ErrIdempotencyConflict   = errors.New("idempotency conflict")
+	ErrCheckoutCartInvariant = errors.New("checkout cart status invariant")
 )

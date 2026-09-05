@@ -10,6 +10,8 @@ import (
 type Service struct {
 	repo Repository
 
+	CheckoutSessionLifetime time.Duration
+
 	// PlatformDomain is the base domain under which platform-generated store
 	// subdomains are allocated (e.g. "<store-code>.matjero.com"). When empty, no
 	// subdomain is auto-allocated at store creation.

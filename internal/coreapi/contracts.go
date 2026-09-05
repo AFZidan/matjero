@@ -3,6 +3,7 @@ package coreapi
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/matjeroapps/core/pkg/commerce"
 	"github.com/matjeroapps/core/pkg/contracts"
@@ -133,6 +134,36 @@ type CartResponse struct {
 	MarketCode string             `json:"market_code"`
 	CartToken  string             `json:"cart_token,omitempty"`
 	Items      []CartLineResponse `json:"items"`
+}
+
+type ShippingAddressRequest struct {
+	RecipientName string  `json:"recipient_name"`
+	AddressLine1  string  `json:"address_line_1"`
+	AddressLine2  *string `json:"address_line_2,omitempty"`
+	City          string  `json:"city"`
+	Region        *string `json:"region,omitempty"`
+	PostalCode    *string `json:"postal_code,omitempty"`
+	CountryCode   string  `json:"country_code"`
+}
+
+type CheckoutFinalizeRequest struct {
+	ShippingAddress ShippingAddressRequest `json:"shipping_address"`
+	ContactEmail    string                 `json:"contact_email"`
+}
+
+type CheckoutSessionResponse struct {
+	ID                    string    `json:"id"`
+	CartID                string    `json:"cart_id"`
+	Status                string    `json:"status"`
+	ExpiresAt             time.Time `json:"expires_at"`
+	CustomerID            *string   `json:"customer_id,omitempty"`
+	GuestOrderAccessToken string    `json:"guest_order_access_token"`
+}
+
+type CheckoutDecisionResponse struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	Replay    bool   `json:"replay"`
 }
 
 // TranslationInput is a localized product name/description.

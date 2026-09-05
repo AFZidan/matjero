@@ -70,6 +70,7 @@ func run(ctx context.Context) error {
 
 	repo := commerce.NewRepository(db.Pool)
 	service := commerce.NewService(repo)
+	service.CheckoutSessionLifetime = cfg.CheckoutSessionLifetime
 	service.PlatformDomain = cfg.PlatformDomain
 	service.ReservedSubdomains = cfg.ReservedSubdomains
 
