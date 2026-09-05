@@ -28,7 +28,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.x"
-      - run: gofmt -w $(find apps cmd packages pkg internal -name '*.go')
+      - run: gofmt -w $(find apps cmd packages modules internal -name '*.go')
       - run: git diff --exit-code
       - run: go vet ./...
       - run: go test ./...

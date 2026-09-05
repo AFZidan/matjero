@@ -6,7 +6,7 @@
 package contracts
 
 import (
-	"github.com/matjeroapps/core/pkg/markets"
+	"github.com/matjeroapps/core/modules/markets"
 )
 
 // CollectionResponse is the standard list envelope returned by list endpoints.

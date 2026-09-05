@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
-	"github.com/matjeroapps/core/pkg/catalog"
+	"github.com/matjeroapps/core/modules/catalog"
 )
 
 const (

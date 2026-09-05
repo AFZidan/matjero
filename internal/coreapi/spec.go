@@ -5,12 +5,12 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/contracts"
-	"github.com/matjeroapps/core/pkg/markets"
-	"github.com/matjeroapps/core/pkg/openapi"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/contracts"
+	"github.com/matjeroapps/core/modules/markets"
+	"github.com/matjeroapps/core/modules/openapi"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 )
 
 // Internal OpenAPI document.

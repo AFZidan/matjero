@@ -5,9 +5,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/matjeroapps/core/modules/contracts"
 	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/i18n"
-	"github.com/matjeroapps/core/pkg/contracts"
 )
 
 // handleListMarkets serves the market list every actor needs for its

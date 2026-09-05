@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/matjeroapps/core/modules/commerce"
 	"github.com/matjeroapps/core/packages/config"
-	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 // fakeLookup is an in-memory StoreLookup for tests.
