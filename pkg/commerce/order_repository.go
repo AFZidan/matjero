@@ -441,7 +441,17 @@ func isInventoryNeutralAdvance(from, to string, authority TransitionAuthority) b
 	return false
 }
 
+var (
+	testHookAfterOrderLock      func(ctx context.Context, orderID string)
+	testHookBeforeOutboxEnqueue func(ctx context.Context) error
+)
+
 func enqueueStatusChangedEvent(ctx context.Context, exec DBExecutor, order Order, fromStatus, correlationID, causationID string, decisionNow time.Time) error {
+	if testHookBeforeOutboxEnqueue != nil {
+		if err := testHookBeforeOutboxEnqueue(ctx); err != nil {
+			return err
+		}
+	}
 	tx, ok := exec.(pgx.Tx)
 	if !ok {
 		return fmt.Errorf("outbox enqueue requires pgx.Tx")
@@ -493,6 +503,10 @@ func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID
 	)
 	if err != nil {
 		return Order{}, translatePGError(err, "lock order for confirm")
+	}
+
+	if testHookAfterOrderLock != nil {
+		testHookAfterOrderLock(ctx, order.ID)
 	}
 
 	if order.Status == OrderStatusConfirmed {
@@ -1141,6 +1155,10 @@ func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, o
 			return Order{}, nil // Safe no-op if row not found
 		}
 		return Order{}, translatePGError(err, "lock order for expiry")
+	}
+
+	if testHookAfterOrderLock != nil {
+		testHookAfterOrderLock(ctx, order.ID)
 	}
 
 	if order.Status != OrderStatusPending {

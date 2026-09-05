@@ -563,9 +563,10 @@ func TestConfirmLockLinearizedDeadlineWithoutSleep(t *testing.T) {
 		var isWaiting bool
 		err := db.QueryRow(ctx, `
 			SELECT EXISTS (
-				SELECT 1 FROM pg_stat_activity
-				WHERE query LIKE '%FOR UPDATE%'
-				  AND pid != pg_backend_pid()
+				SELECT 1 FROM pg_locks l
+				JOIN pg_stat_activity a ON l.pid = a.pid
+				WHERE l.granted = false
+				  AND a.wait_event_type = 'Lock'
 			)
 		`).Scan(&isWaiting)
 		if err != nil {
@@ -1139,92 +1140,215 @@ func TestReservationDeadlineMismatchFailsClosed(t *testing.T) {
 	}
 }
 
-func TestConfirmVsExpirySellerWinsDeterministically(t *testing.T) {
+func TestConfirmVsExpirySellerWinsUnderLockContention(t *testing.T) {
 	db, repo, ctx := setupP53Database(t)
 	suffix := uuid.NewString()
 	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
 	actor := "seller"
 
-	// Seller confirms first before deadline
-	confirmed, err := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-seller-win")
-	if err != nil {
-		t.Fatalf("ConfirmOrder failed: %v", err)
+	lockedCh := make(chan struct{})
+	continueCh := make(chan struct{})
+
+	var once1 sync.Once
+	testHookAfterOrderLock = func(ctx context.Context, oID string) {
+		if oID == order.ID {
+			once1.Do(func() {
+				close(lockedCh)
+				<-continueCh
+			})
+		}
 	}
-	if confirmed.Status != OrderStatusConfirmed {
-		t.Fatalf("expected confirmed, got %s", confirmed.Status)
+	defer func() { testHookAfterOrderLock = nil }()
+
+	var sellerOrder Order
+	var sellerErr error
+	go func() {
+		sellerOrder, sellerErr = repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-seller-win")
+	}()
+
+	// Wait until Seller holds Order lock FOR UPDATE
+	<-lockedCh
+
+	// Expiry concurrently attempts same order and blocks on lock
+	var expiryOrder Order
+	var expiryErr error
+	expiryDone := make(chan struct{})
+	go func() {
+		expiryOrder, expiryErr = repo.ExpirePendingOrder(ctx, nil, order.ID)
+		close(expiryDone)
+	}()
+
+	// Poll pg_locks + pg_stat_activity to prove Expiry is ACTUALLY WAITING on lock
+	for {
+		var isWaiting bool
+		err := db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_locks l
+				JOIN pg_stat_activity a ON l.pid = a.pid
+				WHERE l.granted = false
+				  AND a.wait_event_type = 'Lock'
+			)
+		`).Scan(&isWaiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isWaiting {
+			break
+		}
 	}
 
-	// Expiry runs afterward
-	expired, err := repo.ExpirePendingOrder(ctx, nil, order.ID)
-	if err != nil {
-		t.Fatalf("ExpirePendingOrder after confirm error: %v", err)
+	// Unblock Seller to commit transaction
+	close(continueCh)
+
+	<-expiryDone
+
+	if sellerErr != nil {
+		t.Fatalf("expected seller confirm success, got %v", sellerErr)
 	}
-	if expired.Status != OrderStatusConfirmed {
-		t.Errorf("expected expired order to remain confirmed, got %s", expired.Status)
+	if sellerOrder.Status != OrderStatusConfirmed {
+		t.Fatalf("expected seller order status confirmed, got %s", sellerOrder.Status)
+	}
+	if expiryErr != nil {
+		t.Fatalf("expected expiry success (no-op), got %v", expiryErr)
+	}
+	if expiryOrder.Status != OrderStatusConfirmed {
+		t.Fatalf("expected expiry returned order status confirmed, got %s", expiryOrder.Status)
 	}
 
-	// Assert inventory side effects occurred exactly once
-	var onHand, reserved int64
-	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved)
-	if onHand != 8 || reserved != 0 {
-		t.Errorf("expected on_hand 8 reserved 0, got on_hand %d reserved %d", onHand, reserved)
-	}
-
+	// Assert exactly 1 business effect
 	var resStatus string
-	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus); err != nil {
+		t.Fatal(err)
+	}
 	if resStatus != ReservationStatusConsumed {
-		t.Errorf("expected reservation status consumed, got %s", resStatus)
+		t.Errorf("expected reservation consumed, got %s", resStatus)
+	}
+
+	var onHand, reserved int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved); err != nil {
+		t.Fatal(err)
+	}
+	if onHand != 8 || reserved != 0 {
+		t.Errorf("expected on_hand 8, reserved 0, got on_hand %d reserved %d", onHand, reserved)
 	}
 
 	var movCount, timelineCount, outboxCount int
-	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
-	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
-	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
 	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
-		t.Errorf("expected exactly 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+		t.Errorf("expected 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
 	}
 }
 
-func TestConfirmVsExpirySchedulerWinsDeterministically(t *testing.T) {
+func TestConfirmVsExpirySchedulerWinsUnderLockContention(t *testing.T) {
 	db, repo, ctx := setupP53Database(t)
 	suffix := uuid.NewString()
-	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, -10*time.Minute) // Deadline past
-
-	// Expiry runs first
-	expired, err := repo.ExpirePendingOrder(ctx, nil, order.ID)
-	if err != nil {
-		t.Fatalf("ExpirePendingOrder failed: %v", err)
-	}
-	if expired.Status != OrderStatusCancelled {
-		t.Fatalf("expected cancelled, got %s", expired.Status)
-	}
-
-	// Seller attempts confirmation after expiry
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, -10*time.Minute)
 	actor := "seller"
-	_, errConfirm := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-late")
-	if !errors.Is(errConfirm, ErrInvalidTransition) {
-		t.Errorf("expected ErrInvalidTransition on confirm after expiry, got %v", errConfirm)
+
+	lockedCh := make(chan struct{})
+	continueCh := make(chan struct{})
+
+	var once2 sync.Once
+	testHookAfterOrderLock = func(ctx context.Context, oID string) {
+		if oID == order.ID {
+			once2.Do(func() {
+				close(lockedCh)
+				<-continueCh
+			})
+		}
+	}
+	defer func() { testHookAfterOrderLock = nil }()
+
+	var expiryOrder Order
+	var expiryErr error
+	go func() {
+		expiryOrder, expiryErr = repo.ExpirePendingOrder(ctx, nil, order.ID)
+	}()
+
+	// Wait until Expiry holds Order lock FOR UPDATE
+	<-lockedCh
+
+	// Seller concurrently attempts confirmation and blocks on lock
+	var sellerOrder Order
+	var sellerErr error
+	sellerDone := make(chan struct{})
+	go func() {
+		sellerOrder, sellerErr = repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-seller")
+		close(sellerDone)
+	}()
+
+	// Poll pg_locks + pg_stat_activity to prove Seller is ACTUALLY WAITING on lock
+	for {
+		var isWaiting bool
+		err := db.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM pg_locks l
+				JOIN pg_stat_activity a ON l.pid = a.pid
+				WHERE l.granted = false
+				  AND a.wait_event_type = 'Lock'
+			)
+		`).Scan(&isWaiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if isWaiting {
+			break
+		}
 	}
 
-	// Assert inventory side effects occurred exactly once
-	var onHand, reserved int64
-	db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved)
-	if onHand != 10 || reserved != 0 {
-		t.Errorf("expected on_hand 10 reserved 0, got on_hand %d reserved %d", onHand, reserved)
-	}
+	// Unblock Expiry to commit transaction
+	close(continueCh)
 
+	<-sellerDone
+
+	if expiryErr != nil {
+		t.Fatalf("expected expiry success, got %v", expiryErr)
+	}
+	if expiryOrder.Status != OrderStatusCancelled || expiryOrder.CancellationReason == nil || *expiryOrder.CancellationReason != "confirmation_timeout" {
+		t.Fatalf("expected expiry cancelled with confirmation_timeout, got status %s", expiryOrder.Status)
+	}
+	if sellerErr != ErrInvalidTransition {
+		t.Fatalf("expected seller confirm rejected with ErrInvalidTransition, got %v", sellerErr)
+	}
+	_ = sellerOrder
+
+	// Assert exactly 1 business effect
 	var resStatus string
-	db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus)
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&resStatus); err != nil {
+		t.Fatal(err)
+	}
 	if resStatus != ReservationStatusExpired {
-		t.Errorf("expected reservation status expired, got %s", resStatus)
+		t.Errorf("expected reservation expired, got %s", resStatus)
+	}
+
+	var onHand, reserved int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&onHand, &reserved); err != nil {
+		t.Fatal(err)
+	}
+	if onHand != 10 || reserved != 0 {
+		t.Errorf("expected on_hand 10, reserved 0, got on_hand %d reserved %d", onHand, reserved)
 	}
 
 	var movCount, timelineCount, outboxCount int
-	db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount)
-	db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount)
-	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount)
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
 	if movCount != 1 || timelineCount != 1 || outboxCount != 1 {
-		t.Errorf("expected exactly 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
+		t.Errorf("expected 1 movement, 1 timeline, 1 outbox; got mov %d timeline %d outbox %d", movCount, timelineCount, outboxCount)
 	}
 }
 
@@ -1369,5 +1493,70 @@ func TestFullAtomicRollbackOnFailure(t *testing.T) {
 
 	if oStatus != OrderStatusPending || snapOnHand != 10 || snapReserved != 2 || rStatus != ReservationStatusHeld || movCount != 0 || timelineCount != 0 || outboxCount != 0 {
 		t.Errorf("atomic rollback assertion failed: order=%s snap=(%d,%d) res=%s mov=%d timeline=%d outbox=%d", oStatus, snapOnHand, snapReserved, rStatus, movCount, timelineCount, outboxCount)
+	}
+}
+
+func TestLifecycleTransactionRollsBackAfterDownstreamFailure(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	store, order, snapID, resID := createTestOrderWithInventory(t, db, repo, ctx, suffix, 10, 2, 2, 30*time.Minute)
+	actor := "seller"
+
+	// Inject failure at outbox enqueue (AFTER snapshot, reservation, movement, order update, and timeline insert have run)
+	testHookBeforeOutboxEnqueue = func(ctx context.Context) error {
+		return errors.New("simulated outbox enqueue failure after mutations")
+	}
+	defer func() { testHookBeforeOutboxEnqueue = nil }()
+
+	_, err := repo.ConfirmOrder(ctx, nil, store.ID, order.ID, &actor, "corr-rollback-test")
+	if err == nil || !strings.Contains(err.Error(), "simulated outbox enqueue failure") {
+		t.Fatalf("expected simulated outbox error, got %v", err)
+	}
+
+	// Verify complete PostgreSQL transaction rollback across all 6 tables after mutations executed
+	var oStatus string
+	var oVersion int64
+	if err := db.QueryRow(ctx, `SELECT status, aggregate_version FROM orders WHERE id = $1`, order.ID).Scan(&oStatus, &oVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	var snapOnHand, snapReserved, snapVersion int64
+	if err := db.QueryRow(ctx, `SELECT on_hand_qty, reserved_qty, version FROM inventory_snapshots WHERE id = $1`, snapID).Scan(&snapOnHand, &snapReserved, &snapVersion); err != nil {
+		t.Fatal(err)
+	}
+
+	var rStatus string
+	if err := db.QueryRow(ctx, `SELECT status FROM inventory_reservations WHERE id = $1`, resID).Scan(&rStatus); err != nil {
+		t.Fatal(err)
+	}
+
+	var movCount, timelineCount, outboxCount int
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM inventory_movements WHERE inventory_snapshot_id = $1`, snapID).Scan(&movCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM order_timeline WHERE order_id = $1`, order.ID).Scan(&timelineCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, order.ID).Scan(&outboxCount); err != nil {
+		t.Fatal(err)
+	}
+
+	if oStatus != OrderStatusPending || oVersion != 1 {
+		t.Errorf("expected order status pending version 1, got status %s version %d", oStatus, oVersion)
+	}
+	if snapOnHand != 10 || snapReserved != 2 || snapVersion != 1 {
+		t.Errorf("expected snapshot 10/2 version 1, got on_hand %d reserved %d version %d", snapOnHand, snapReserved, snapVersion)
+	}
+	if rStatus != ReservationStatusHeld {
+		t.Errorf("expected reservation status held, got %s", rStatus)
+	}
+	if movCount != 0 {
+		t.Errorf("expected 0 movements after rollback, got %d", movCount)
+	}
+	if timelineCount != 0 {
+		t.Errorf("expected 0 timeline entries after rollback, got %d", timelineCount)
+	}
+	if outboxCount != 0 {
+		t.Errorf("expected 0 outbox events after rollback, got %d", outboxCount)
 	}
 }
