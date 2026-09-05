@@ -1897,7 +1897,17 @@ func TestFinalizeCheckoutCommercialPostAcceptanceImmutability(t *testing.T) {
 	// Wait until checkout reaches post-acceptance hook inside open transaction
 	<-hookReached
 
-	// Mutate commercial data externally while transaction remains open post-acceptance
+	// Create Variant B for the same product
+	variantB := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantB, setup.ProductID, "VAR-B-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate commercial data externally while transaction remains open post-acceptance:
+	// Re-associate SKU to Variant B
+	if _, err := db.Exec(ctx, `UPDATE skus SET variant_id = $1 WHERE id = $2`, variantB, setup.SKUID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.Exec(ctx, `UPDATE seller_listing_prices SET amount_minor = 9999 WHERE seller_listing_id = $1`, setup.ListingID); err != nil {
 		t.Fatal(err)
 	}
@@ -1926,11 +1936,135 @@ func TestFinalizeCheckoutCommercialPostAcceptanceImmutability(t *testing.T) {
 	}
 
 	var dbUnitPrice, dbCost int64
-	if err := db.QueryRow(ctx, `SELECT unit_price_minor, supplier_cost_minor FROM order_items WHERE order_id = $1`, order.ID).Scan(&dbUnitPrice, &dbCost); err != nil {
+	var dbVariantID string
+	if err := db.QueryRow(ctx, `SELECT unit_price_minor, supplier_cost_minor, variant_id FROM order_items WHERE order_id = $1`, order.ID).Scan(&dbUnitPrice, &dbCost, &dbVariantID); err != nil {
 		t.Fatal(err)
 	}
 	if dbUnitPrice != 2000 || dbCost != 1200 {
 		t.Fatalf("persisted item snapshots changed: unit_price=%d, cost=%d", dbUnitPrice, dbCost)
+	}
+	if dbVariantID != setup.VariantID {
+		t.Fatalf("persisted variant_id = %s, want original Variant A (%s), not Variant B (%s)", dbVariantID, setup.VariantID, variantB)
+	}
+}
+
+func TestFinalizeCheckoutCustomerAddressImmutability(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+	setup := setupSellerCheckoutTest(t, db, repo, ctx, suffix, 10, 1000)
+
+	customer, err := repo.CreateCustomer(ctx, setup.Store.ID, "EG", nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	custAddrID := uuid.NewString()
+	if _, err := db.Exec(ctx, `
+		INSERT INTO customer_addresses (id, customer_id, store_id, recipient_name, address_line_1, city, country_code, is_default, created_at, updated_at)
+		VALUES ($1, $2, $3, 'Original Recipient', 'Original Line 1', 'Cairo', 'EG', true, clock_timestamp(), clock_timestamp())
+	`, custAddrID, customer.ID, setup.Store.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE carts SET customer_id = $1 WHERE id = $2`, customer.ID, setup.Cart.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `UPDATE checkout_sessions SET customer_id = $1 WHERE id = $2`, customer.ID, setup.Session.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := testFinalizePayload(setup.Session.ID)
+	order, err := repo.FinalizeCheckout(ctx, setup.Store.ID, req, "corr-addr-immut")
+	if err != nil {
+		t.Fatalf("FinalizeCheckout failed: %v", err)
+	}
+
+	if _, err := db.Exec(ctx, `UPDATE customer_addresses SET recipient_name = 'Mutated Recipient', address_line_1 = 'Mutated Line 1' WHERE id = $1`, custAddrID); err != nil {
+		t.Fatal(err)
+	}
+
+	var recipientName, line1 string
+	if err := db.QueryRow(ctx, `SELECT recipient_name, address_line_1 FROM order_addresses WHERE order_id = $1`, order.ID).Scan(&recipientName, &line1); err != nil {
+		t.Fatal(err)
+	}
+	if recipientName != "John Doe" || line1 != "123 Main St" {
+		t.Fatalf("order_addresses mutated: recipient=%s, line1=%s", recipientName, line1)
+	}
+}
+
+func TestFinalizeCheckoutSessionCreationLossSafe(t *testing.T) {
+	db, repo, ctx := setupP53Database(t)
+	suffix := uuid.NewString()
+
+	seller, err := repo.CreateSeller(ctx, "seller-"+suffix, "Seller "+suffix, "active", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := repo.CreateStoreWithDomain(ctx, seller.ID, "EG", "store-"+suffix, "Store "+suffix, "active", nil, suffix+".test", "platform", "active", true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	productID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO products (id, slug, status) VALUES ($1, $2, 'active')`, productID, "prod-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO product_translations (product_id, locale, name) VALUES ($1, 'en', 'Prod')`, productID); err != nil {
+		t.Fatal(err)
+	}
+	variantID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO variants (id, product_id, code, status) VALUES ($1, $2, $3, 'active')`, variantID, productID, "VAR-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	skuID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO skus (id, variant_id, code, status) VALUES ($1, $2, $3, 'active')`, skuID, variantID, "SKU-"+suffix); err != nil {
+		t.Fatal(err)
+	}
+	listingID := uuid.NewString()
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listings (id, store_id, product_id, supplier_offer_id, market_code, status) VALUES ($1, $2, $3, NULL, 'EG', 'active')`, listingID, store.ID, productID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(ctx, `INSERT INTO seller_listing_prices (id, seller_listing_id, amount_minor, currency_code, is_current) VALUES ($1, $2, 1000, 'EGP', true)`, uuid.NewString(), listingID); err != nil {
+		t.Fatal(err)
+	}
+
+	cart, cartToken, err := repo.CreateCart(ctx, store.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.AddCartItem(ctx, store.ID, cartToken, skuID, 1); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionA, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = sessionA
+
+	var orderCountA int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE store_id = $1`, store.ID).Scan(&orderCountA)
+	if orderCountA != 0 {
+		t.Fatalf("Order created simply by session creation: %d", orderCountA)
+	}
+
+	sessionB, _, err := repo.CreateCheckoutSession(ctx, store.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatalf("CreateCheckoutSession B failed: %v", err)
+	}
+
+	if sessionB.ID == "" {
+		t.Fatal("Session B ID is empty")
+	}
+
+	var orderCountB int
+	_ = db.QueryRow(ctx, `SELECT count(*) FROM orders WHERE store_id = $1`, store.ID).Scan(&orderCountB)
+	if orderCountB != 0 {
+		t.Fatalf("orderCountB = %d, want 0", orderCountB)
+	}
+
+	var cartStatus string
+	_ = db.QueryRow(ctx, `SELECT status FROM carts WHERE id = $1`, cart.ID).Scan(&cartStatus)
+	if cartStatus != CartStatusActive {
+		t.Fatalf("cartStatus = %s, want active", cartStatus)
 	}
 }
 

@@ -56,54 +56,58 @@ The transaction executes in exact sequential order:
 
 All concurrency, allocation, validation, and immutability integration tests run deterministically with **ZERO `time.Sleep()`**:
 
-| Test Name | Verified Matrix Case(s) | Description / Coverage |
+| Test Name | Verified Matrix Case(s) | Status & Description / Coverage |
 | :--- | :--- | :--- |
-| `TestIntegrationFinalizeCheckoutCorrelationIDPropagation` | `98` | HTTP/integration proof that generated or caller correlation ID propagates to outbox event |
-| `TestFinalizeCheckoutConfiguredConfirmationDuration` | `95` | Configured duration respected (`confirmation_deadline_at - order_created_at == config.OrderConfirmationDuration`) |
-| `TestFinalizeCheckoutSupplierOfferAvailabilityFailClosed` | `104` | Availability true/no-row allowed; availability false fails closed (`ErrListingUnavailable`) |
-| `TestFinalizeCheckoutSupplierOfferAvailabilityUnexpectedDBError` | `104` | Availability query DB error rolls back transaction, leaving 0 side effects |
-| `TestFinalizeCheckoutCopiesSessionCapabilityDigest` | `63` | Exact byte-for-byte capability digest copy from Session to Order |
-| `TestFinalizeCheckoutMissingGuestDigestRejected` | `67` | Invalid/missing capability digest rejected; zero side effects across all 11 tables |
-| `TestFinalizeCheckoutMoneyMultiplicationOverflow` | `21`, `23` | Cart & listing price math.MaxInt64 overflow reaches `checkedMultiply`, returns `ErrInvalidInput`, 0 side effects |
-| `TestFinalizeCheckoutMaximumValidMultiplication` | `20` | Max valid `int64` multiplication succeeds with exact line totals and subtotal |
-| `TestFinalizeCheckoutSubtotalAdditionOverflow` | `22`, `23` | Multiple valid lines summing > MaxInt64 fails `checkedAdd`, returns `ErrInvalidInput`, complete rollback |
-| `TestFinalizeCheckoutTwoOpenSessionsOneCartConcurrentContention` | `91`, `92` | Real concurrent contention on Cart lock scoped by exact backend PIDs; exactly 1 Order, loser returns `ErrConflict` |
-| `TestFinalizeCheckoutLateFailureRollsBackEverything` | `3` | Failure before commit asserts exact equality for all 11 tables/states, including `store_order_sequences` |
-| `TestFinalizeCheckoutCumulativeSnapshotDemand` | `113` | Multiple cart lines competing for same snapshot capacity enforce cumulative demand (`ErrInsufficientInventory`) |
-| `TestFinalizeCheckoutDeterministicAllocationFallback` | `2`, `114` | ID-ASC candidate snapshots fall back to next snapshot when earlier snapshot capacity exhausted |
-| `TestFinalizeCheckoutSessionExpiryAfterCartLockWait` | `17`, `18`, `86` | Scoped lock wait past session expiry captures `$session_decision_now` post-lock and returns `checkout_expired` |
-| `TestFinalizeCheckoutConfirmationWindowAfterInventoryWait` | `95` | Scoped snapshot lock wait proves `$order_created_at > blockedTimestamp` and grants full configured deadline window |
-| `TestFinalizeCheckoutSupplierBacked` | `4`, `103`, `107`, `118`, `119`, `121` | Active Supplier Offer finalization populates supplier cost/source snapshots, supplier location; Supplier B & Store stock never eligible |
-| `TestFinalizeCheckoutSellerOwnedSourceIsolation` | `5`, `105`, `106` | Seller listing cannot allocate another Store or Supplier stock; inactive location rejected |
-| `TestFinalizeCheckoutCommercialPreAcceptanceRace` | `126` | Price/status change committed before acceptance is observed under exact snapshot lock wait and rejected |
-| `TestFinalizeCheckoutCommercialPostAcceptanceImmutability` | `41`, `120`, `127` | Hook pauses checkout post `$order_created_at`; external commercial changes leave persisted Order totals, retail price, and supplier cost unchanged |
-| `TestOrderCreatedEnvelopeCompleteAndPrivate` | `96`, `99`, `125` | Persisted outbox row envelope fields (`event_id` UUID, `causation_id == ""`) asserted; payload privacy excludes supplier cost, reservation tokens, digests |
-| `TestOrderToPublicPrivacy` | `124` | `order.ToPublic()` JSON serialization excludes all supplier economics, reservation tokens, and guest capability digests |
-| `TestFinalizeCheckoutPersistedListingNoRemap` | `137` | Persisted CartItem `seller_listing_id` remains sole authority; deactivating Listing A rejects with `ErrListingUnavailable` without remapping to Listing B |
-| `TestFinalizeCheckoutMarketCurrencyMismatch` | `11`, `122` | Listing/cart currency matching cart expected currency BUT differing from Store Market currency returns `ErrMarketMismatch` |
-| `TestFinalizeCheckoutSessionFinalizedCartActiveInvariant` | `70`, `93` | FINALIZED session paired with active cart returns `ErrCheckoutCartInvariant` |
-| `TestFinalizeCheckoutImmutabilitySnapshots` | `42`, `43`, `44`, `45`, `46` | Post-checkout product title, SKU code, supplier wholesale price mutations leave order item snapshots unchanged; `ON DELETE RESTRICT` enforced |
-| `TestFinalizeCheckoutIncompletePayloadRollback` | `14`, `15` | Missing recipient name / email returns `ErrInvalidInput`, session remains `open`, cart `active`, 0 side effects |
-| `TestFinalizeCheckoutSessionCreationLossSafe` | `85` | Session creation response loss leaves no order; subsequent creation is safe |
-| `TestFinalizeCheckoutCreatesOrderAtomically` | `16`, `57`, `68` | Single-transaction creation, initial aggregate version = 1, open session with active cart finalizes |
-| `TestFinalizeCheckoutTenConcurrentIdenticalRequestsOneOrder` | `6`, `7`, `64` | 10 concurrent identical finalizes produce 1 Order; all return identical Order |
-| `TestFinalizeCheckoutReplayReturnsExactSameOrder` | `19`, `65`, `69`, `82` | Finalized session replay returns exact same Order with zero side-effects and no capability rotation |
-| `TestFinalizeCheckoutChangedSemanticReplayConflicts` | `8`, `83`, `84` | Finalized session with altered semantic request returns `idempotency_conflict` |
-| `TestFinalizeCheckoutLastUnitContention` | `1`, `94` | 20+ concurrent finalization requests yield 1 Order, 1 held reservation, 1 `reservation_held` movement, `on_hand=1`, `reserved=1`, 0 side effects for losers |
-| `TestFinalizeCheckoutPriceChanged` | `9` | Retail price change before acceptance returns `price_changed` |
-| `TestFinalizeCheckoutCurrencyChanged` | `10` | Retail currency mismatch returns `price_changed` |
-| `TestFinalizeCheckoutInactiveProduct` | `100` | Inactive product returns `listing_unavailable` |
-| `TestFinalizeCheckoutInactiveVariant` | `101` | Inactive variant returns `listing_unavailable` |
-| `TestFinalizeCheckoutInactiveSKU` | `102` | Inactive SKU returns `listing_unavailable` |
-| `TestFinalizeCheckoutSellerOwnedSupplierFieldsNull` | `123` | Seller-owned order items contain NULL supplier cost and source fields |
-| `TestFinalizeCheckoutNoSplitFulfillment` | `112` | Order line requiring 5 units cannot split across locations with 3 + 3 units |
+| `TestIntegrationFinalizeCheckoutCorrelationIDPropagation` | `98` | **P5.5 PORTION VERIFIED** — HTTP/request correlation reaches persisted Outbox row. *P5.6 portion pending — RabbitMQ publication propagation.* |
+| `TestFinalizeCheckoutConfiguredConfirmationDuration` | `95` | **VERIFIED BY P5.5** — Configured duration respected (`confirmation_deadline_at - order_created_at == config.OrderConfirmationDuration`) |
+| `TestFinalizeCheckoutSupplierOfferAvailabilityFailClosed` | `104` | **VERIFIED BY P5.5** — Availability true/no-row allowed; availability false fails closed (`ErrListingUnavailable`) |
+| `TestFinalizeCheckoutSupplierOfferAvailabilityUnexpectedDBError` | `104` | **VERIFIED BY P5.5** — Availability query DB error rolls back transaction, leaving 0 side effects |
+| `TestFinalizeCheckoutCopiesSessionCapabilityDigest` | `63` | **VERIFIED BY P5.5** — Exact byte-for-byte capability digest copy from Session to Order |
+| `TestFinalizeCheckoutMissingGuestDigestRejected` | `67` | **VERIFIED BY P5.5** — Invalid/missing capability digest rejected; zero side effects across all 11 tables |
+| `TestFinalizeCheckoutMoneyMultiplicationOverflow` | `21`, `23` | **VERIFIED BY P5.5** — Cart & listing price math.MaxInt64 overflow reaches `checkedMultiply`, returns `ErrInvalidInput`, 0 side effects |
+| `TestFinalizeCheckoutMaximumValidMultiplication` | `20` | **VERIFIED BY P5.5** — Max valid `int64` multiplication succeeds with exact line totals and subtotal |
+| `TestFinalizeCheckoutSubtotalAdditionOverflow` | `22`, `23` | **VERIFIED BY P5.5** — Multiple valid lines summing > MaxInt64 fails `checkedAdd`, returns `ErrInvalidInput`, complete rollback |
+| `TestFinalizeCheckoutTwoOpenSessionsOneCartConcurrentContention` | `91`, `92` | **VERIFIED BY P5.5** — Real concurrent contention on Cart lock scoped by exact backend PIDs; exactly 1 Order, loser returns `ErrConflict` |
+| `TestFinalizeCheckoutLateFailureRollsBackEverything` | `3` | **VERIFIED BY P5.5** — Failure before commit asserts exact equality for all 11 tables/states, including `store_order_sequences` |
+| `TestFinalizeCheckoutCumulativeSnapshotDemand` | `113` | **VERIFIED BY P5.5** — Multiple cart lines competing for same snapshot capacity enforce cumulative demand (`ErrInsufficientInventory`) |
+| `TestFinalizeCheckoutDeterministicAllocationFallback` | `2`, `114` | **VERIFIED BY P5.5** — ID-ASC candidate snapshots fall back to next snapshot when earlier snapshot capacity exhausted |
+| `TestFinalizeCheckoutSessionExpiryAfterCartLockWait` | `17`, `18`, `86` | **VERIFIED BY P5.5** — Scoped lock wait past session expiry captures `$session_decision_now` post-lock and returns `checkout_expired` |
+| `TestFinalizeCheckoutConfirmationWindowAfterInventoryWait` | `95` | **VERIFIED BY P5.5** — Scoped snapshot lock wait proves `$order_created_at > blockedTimestamp` and grants full configured deadline window |
+| `TestFinalizeCheckoutSupplierBacked` | `4`, `103`, `107`, `118`, `119`, `121` | **VERIFIED BY P5.5** — Active Supplier Offer finalization populates supplier cost/source snapshots, supplier location; Supplier B & Store stock never eligible |
+| `TestFinalizeCheckoutSellerOwnedSourceIsolation` | `5`, `105`, `106` | **VERIFIED BY P5.5** — Seller listing cannot allocate another Store or Supplier stock; inactive location rejected |
+| `TestFinalizeCheckoutCommercialPreAcceptanceRace` | `126` | **VERIFIED BY P5.5** — Price/status change committed before acceptance is observed under exact snapshot lock wait and rejected |
+| `TestFinalizeCheckoutCommercialPostAcceptanceImmutability` | `41`, `120`, `127` | **VERIFIED BY P5.5** — Hook pauses checkout post `$order_created_at`; external commercial & Variant changes leave persisted Order totals, retail price, supplier cost, and Variant ID unchanged |
+| `TestOrderCreatedEnvelopeCompleteAndPrivate` | `96`, `99`, `125` | **P5.5 PORTION VERIFIED** — Complete persisted Outbox EventEnvelope (`event_id` UUID, `causation_id == ""`). *P5.6 portion pending — publisher reads/publishes complete envelope.* Payload privacy excludes supplier cost, reservation tokens, digests |
+| `TestOrderToPublicPrivacy` | `124` | **VERIFIED BY P5.5** — `order.ToPublic()` JSON serialization excludes all supplier economics, reservation tokens, and guest capability digests |
+| `TestFinalizeCheckoutPersistedListingNoRemap` | `137` | **VERIFIED BY P5.5** — Persisted CartItem `seller_listing_id` remains sole authority; deactivating Listing A rejects with `ErrListingUnavailable` without remapping to Listing B |
+| `TestFinalizeCheckoutMarketCurrencyMismatch` | `11`, `122` | **VERIFIED BY P5.5** — Listing/cart currency matching cart expected currency BUT differing from Store Market currency returns `ErrMarketMismatch` |
+| `TestFinalizeCheckoutSessionFinalizedCartActiveInvariant` | `70`, `93` | **VERIFIED BY P5.5** — FINALIZED session paired with active cart returns `ErrCheckoutCartInvariant` |
+| `TestFinalizeCheckoutImmutabilitySnapshots` | `42`, `43`, `45`, `46` | **VERIFIED BY P5.5** — Post-checkout product title, SKU code, supplier wholesale price mutations leave order item snapshots unchanged; `ON DELETE RESTRICT` enforced |
+| `TestFinalizeCheckoutCustomerAddressImmutability` | `44` | **VERIFIED BY P5.5** — Customer address mutation after checkout leaves order address snapshot unchanged |
+| `TestFinalizeCheckoutIncompletePayloadRollback` | `14`, `15` | **VERIFIED BY P5.5** — Missing recipient name / email returns `ErrInvalidInput`, session remains `open`, cart `active`, 0 side effects |
+| `TestFinalizeCheckoutSessionCreationLossSafe` | `85` | **VERIFIED BY P5.5** — Session creation response loss leaves no order; subsequent session creation for same cart is safe |
+| `TestFinalizeCheckoutCreatesOrderAtomically` | `16`, `57`, `68` | **VERIFIED BY P5.5** — Single-transaction creation, initial aggregate version = 1, open session with active cart finalizes |
+| `TestFinalizeCheckoutTenConcurrentIdenticalRequestsOneOrder` | `6`, `7`, `64` | **VERIFIED BY P5.5** — 10 concurrent identical finalizes produce 1 Order; all return identical Order |
+| `TestFinalizeCheckoutReplayReturnsExactSameOrder` | `19`, `65`, `69`, `82` | **VERIFIED BY P5.5** — Finalized session replay returns exact same Order with zero side-effects and no capability rotation |
+| `TestFinalizeCheckoutChangedSemanticReplayConflicts` | `8`, `83`, `84` | **VERIFIED BY P5.5** — Finalized session with altered semantic request returns `idempotency_conflict` |
+| `TestFinalizeCheckoutLastUnitContention` | `1`, `94` | **VERIFIED BY P5.5** — 20+ concurrent finalization requests yield 1 Order, 1 held reservation, 1 `reservation_held` movement, `on_hand=1`, `reserved=1`, 0 side effects for losers |
+| `TestFinalizeCheckoutPriceChanged` | `9` | **VERIFIED BY P5.5** — Retail price change before acceptance returns `price_changed` |
+| `TestFinalizeCheckoutCurrencyChanged` | `10` | **VERIFIED BY P5.5** — Retail currency mismatch returns `price_changed` |
+| `TestFinalizeCheckoutInactiveProduct` | `100` | **VERIFIED BY P5.5** — Inactive product returns `listing_unavailable` |
+| `TestFinalizeCheckoutInactiveVariant` | `101` | **VERIFIED BY P5.5** — Inactive variant returns `listing_unavailable` |
+| `TestFinalizeCheckoutInactiveSKU` | `102` | **VERIFIED BY P5.5** — Inactive SKU returns `listing_unavailable` |
+| `TestFinalizeCheckoutSellerOwnedSupplierFieldsNull` | `123` | **VERIFIED BY P5.5** — Seller-owned order items contain NULL supplier cost and source fields |
+| `TestFinalizeCheckoutNoSplitFulfillment` | `112` | **VERIFIED BY P5.5** — Order line requiring 5 units cannot split across locations with 3 + 3 units |
 
 ---
 
 ## 4. Matrix Coverage Summary
 
-- **VERIFIED P5.5 Matrix Cases**: `1–24`, `41–46`, `57`, `63–65`, `67–70`, `82–86`, `91–96`, `98–107`, `112–114`, `118–127`, `137`.
-- **OUT OF SCOPE WITH EXPLICIT PHASE OWNER**:
+- **VERIFIED BY P5.5**: `1–24`, `41–46`, `57`, `63–65`, `67–70`, `82–86`, `91–95`, `99–107`, `112–114`, `118–127`, `137`.
+- **P5.5 PORTION VERIFIED / REMAINDER OWNED BY P5.6**:
+  - `96`: P5.5 portion VERIFIED — complete persisted Outbox EventEnvelope; P5.6 portion pending — publisher reads/publishes complete envelope.
+  - `98`: P5.5 portion VERIFIED — HTTP correlation reaches persisted Outbox row; P5.6 portion pending — RabbitMQ publication propagation.
+- **OUT OF P5.5 SCOPE**:
   - **P5.4 Owned Inventory Lifecycle**: `25–31`, `37–39`, `59–60`, `71–77`, `87–90`, `115–117` (Verified in Phase 5.4 suite `orders_integration_test.go` & `order_inventory_lifecycle_integration_test.go`).
   - **P5.6 Outbox Publisher Reliability**: `49–56`, `78–81`, `97` (Strictly out-of-scope P5.6 outbox claim/lease publisher work).
   - **P5.7 Storefront API Authorization & Catalog Resolution**: `32–36`, `40`, `61–62`, `66`, `108–111`, `128–136` (Storefront API HTTP capability header propagation & Add-to-Cart listing resolution).

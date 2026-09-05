@@ -432,6 +432,7 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 			cartItem                 CartItem
 			sellerListingID          string
 			productID                string
+			variantID                string
 			supplierOfferID          *string
 			sourceSupplierID         *string
 			productTitle             string
@@ -501,17 +502,17 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 			}
 			lv.productTitle = pName
 
-			var vStatus, vProductID string
-			err = tx.QueryRow(ctx, `SELECT status, product_id FROM variants WHERE id = (SELECT variant_id FROM skus WHERE id = $1)`, item.SKUID).Scan(&vStatus, &vProductID)
-			if err != nil || vStatus != "active" || vProductID != slProduct_id {
+			var vID, vStatus, vProductID, kStatus, kCode string
+			err = tx.QueryRow(ctx, `
+				SELECT v.id, v.status, v.product_id, k.status, k.code
+				FROM skus k
+				JOIN variants v ON v.id = k.variant_id
+				WHERE k.id = $1
+			`, item.SKUID).Scan(&vID, &vStatus, &vProductID, &kStatus, &kCode)
+			if err != nil || vStatus != "active" || vProductID != slProduct_id || kStatus != "active" {
 				return ErrListingUnavailable
 			}
-
-			var kStatus, kCode string
-			err = tx.QueryRow(ctx, `SELECT status, code FROM skus WHERE id = $1`, item.SKUID).Scan(&kStatus, &kCode)
-			if err != nil || kStatus != "active" {
-				return ErrListingUnavailable
-			}
+			lv.variantID = vID
 			lv.skuCode = kCode
 
 			// Supplier-backed rules
@@ -664,7 +665,7 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 				ID:                       uuid.NewString(),
 				SellerListingID:          &alloc.validation.sellerListingID,
 				ProductID:                &alloc.validation.productID,
-				VariantID:                nil,
+				VariantID:                &alloc.validation.variantID,
 				SKUID:                    &alloc.validation.cartItem.SKUID,
 				SupplierOfferID:          alloc.validation.supplierOfferID,
 				SourceSupplierID:         alloc.validation.sourceSupplierID,
@@ -679,10 +680,6 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 				SupplierCostMinor:        alloc.validation.supplierCostMinor,
 				SupplierCostCurrencyCode: alloc.validation.supplierCostCurrencyCode,
 				CreatedAt:                orderCreatedAt,
-			}
-			var vID string
-			if err := tx.QueryRow(ctx, `SELECT variant_id FROM skus WHERE id = $1`, alloc.validation.cartItem.SKUID).Scan(&vID); err == nil {
-				orderItem.VariantID = &vID
 			}
 
 			orderItems = append(orderItems, orderItem)
