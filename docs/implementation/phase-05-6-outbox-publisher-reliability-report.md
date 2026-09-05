@@ -6,7 +6,8 @@ Phase 5.6 implements a production-grade, multi-publisher reliable Transactional 
 
 - **Base SHA:** `65a53f47b393775ff27e733c1ae3289fe79627aa`
 - **Branch:** `feature/p5-6-outbox-publisher-reliability`
-- **Head SHA:** `dba11ee7c7b070061b32a099bf918b0231768705`
+- **Head SHA:** `6e8e7720abbc9169d0db1a46473cd75b3d3348dc`
+- **PR:** `https://github.com/matjeroapps/core/pull/32`
 - **Migration F:** `000013_outbox_publish_claims` (up/down)
 
 ---
