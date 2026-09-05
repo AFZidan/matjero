@@ -18,7 +18,8 @@ import (
 )
 
 type Repository struct {
-	pool *pgxpool.Pool
+	pool                      *pgxpool.Pool
+	OrderConfirmationDuration time.Duration
 }
 
 func NewRepository(pool *pgxpool.Pool) Repository {

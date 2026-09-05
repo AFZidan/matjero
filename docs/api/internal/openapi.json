@@ -7860,8 +7860,8 @@
     },
     "/internal/v1/storefront/checkout-sessions/{sessionID}/finalize": {
       "post": {
-        "description": "Locks the Checkout Session and Cart, captures the lock-linearized expiry decision, and computes the server-side fingerprint. This P5.2 operation creates no Order or reservation.",
-        "operationId": "internalEvaluateCheckoutSession",
+        "description": "Executes atomic single-transaction checkout finalization turning an eligible Checkout Session and Cart into an Order.",
+        "operationId": "internalFinalizeCheckoutSession",
         "parameters": [
           {
             "description": "Override locale resolution",
@@ -7941,26 +7941,203 @@
               "application/json": {
                 "schema": {
                   "properties": {
-                    "replay": {
-                      "type": "boolean"
+                    "address": {
+                      "nullable": true,
+                      "properties": {
+                        "address_line_1": {
+                          "type": "string"
+                        },
+                        "address_line_2": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "address_type": {
+                          "type": "string"
+                        },
+                        "city": {
+                          "type": "string"
+                        },
+                        "country_code": {
+                          "type": "string"
+                        },
+                        "created_at": {
+                          "format": "date-time",
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "order_id": {
+                          "type": "string"
+                        },
+                        "phone": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "postal_code": {
+                          "nullable": true,
+                          "type": "string"
+                        },
+                        "recipient_name": {
+                          "type": "string"
+                        },
+                        "region": {
+                          "nullable": true,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "address_line_1",
+                        "address_type",
+                        "city",
+                        "country_code",
+                        "created_at",
+                        "id",
+                        "order_id",
+                        "recipient_name"
+                      ],
+                      "type": "object"
                     },
-                    "session_id": {
+                    "aggregate_version": {
+                      "format": "int64",
+                      "type": "integer"
+                    },
+                    "cancellation_reason": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "checkout_session_id": {
+                      "type": "string"
+                    },
+                    "confirmation_deadline_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    "currency_code": {
+                      "type": "string"
+                    },
+                    "customer_id": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "items": {
+                        "properties": {
+                          "created_at": {
+                            "format": "date-time",
+                            "type": "string"
+                          },
+                          "currency_code": {
+                            "type": "string"
+                          },
+                          "id": {
+                            "type": "string"
+                          },
+                          "line_total_minor": {
+                            "format": "int64",
+                            "type": "integer"
+                          },
+                          "order_id": {
+                            "type": "string"
+                          },
+                          "product_id": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "product_title_snapshot": {
+                            "type": "string"
+                          },
+                          "quantity": {
+                            "format": "int64",
+                            "type": "integer"
+                          },
+                          "seller_listing_id": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "sku_code_snapshot": {
+                            "type": "string"
+                          },
+                          "sku_id": {
+                            "nullable": true,
+                            "type": "string"
+                          },
+                          "unit_price_minor": {
+                            "format": "int64",
+                            "type": "integer"
+                          },
+                          "variant_id": {
+                            "nullable": true,
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "created_at",
+                          "currency_code",
+                          "id",
+                          "line_total_minor",
+                          "order_id",
+                          "product_title_snapshot",
+                          "quantity",
+                          "sku_code_snapshot",
+                          "unit_price_minor"
+                        ],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "market_code": {
+                      "type": "string"
+                    },
+                    "order_number": {
                       "type": "string"
                     },
                     "status": {
                       "type": "string"
+                    },
+                    "store_id": {
+                      "type": "string"
+                    },
+                    "subtotal_minor": {
+                      "format": "int64",
+                      "type": "integer"
+                    },
+                    "total_minor": {
+                      "format": "int64",
+                      "type": "integer"
+                    },
+                    "updated_at": {
+                      "format": "date-time",
+                      "type": "string"
                     }
                   },
                   "required": [
-                    "replay",
-                    "session_id",
-                    "status"
+                    "aggregate_version",
+                    "checkout_session_id",
+                    "confirmation_deadline_at",
+                    "created_at",
+                    "currency_code",
+                    "id",
+                    "market_code",
+                    "order_number",
+                    "status",
+                    "store_id",
+                    "subtotal_minor",
+                    "total_minor",
+                    "updated_at"
                   ],
                   "type": "object"
                 }
               }
             },
-            "description": "Checkout decision"
+            "description": "Finalized Order"
           },
           "400": {
             "content": {
@@ -8148,7 +8325,7 @@
             "bearerAuth": []
           }
         ],
-        "summary": "Evaluate Checkout Session finalization semantics",
+        "summary": "Finalize Checkout Session atomically",
         "tags": [
           "Storefront"
         ]

@@ -23,6 +23,7 @@ const (
 	EventTypeSupplierOfferUpserted = "commerce.supplier_offer.upserted.v1"
 	EventTypeSellerListingUpserted = "commerce.seller_listing.upserted.v1"
 	EventTypeOrderStatusChanged    = "commerce.order.status_changed.v1"
+	EventTypeOrderCreated          = "commerce.order.created.v1"
 )
 
 type SearchTranslation struct {
@@ -227,6 +228,106 @@ func NewOrderStatusChangedEvent(order Order, fromStatus string, correlationID, c
 
 	if err := envelope.Validate(); err != nil {
 		return events.EventEnvelope{}, fmt.Errorf("validate order status changed event: %w", err)
+	}
+
+	return envelope, nil
+}
+
+type OrderCreatedItemPayload struct {
+	ID                   string    `json:"id"`
+	OrderID              string    `json:"order_id"`
+	SellerListingID      *string   `json:"seller_listing_id,omitempty"`
+	ProductID            *string   `json:"product_id,omitempty"`
+	VariantID            *string   `json:"variant_id,omitempty"`
+	SKUID                *string   `json:"sku_id,omitempty"`
+	ProductTitleSnapshot string    `json:"product_title_snapshot"`
+	SKUCodeSnapshot      string    `json:"sku_code_snapshot"`
+	UnitPriceMinor       int64     `json:"unit_price_minor"`
+	CurrencyCode         string    `json:"currency_code"`
+	Quantity             int64     `json:"quantity"`
+	LineTotalMinor       int64     `json:"line_total_minor"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+type OrderCreatedPayload struct {
+	OrderID                string                    `json:"order_id"`
+	OrderNumber            string                    `json:"order_number"`
+	StoreID                string                    `json:"store_id"`
+	MarketCode             string                    `json:"market_code"`
+	CustomerID             *string                   `json:"customer_id,omitempty"`
+	CheckoutSessionID      string                    `json:"checkout_session_id"`
+	Status                 string                    `json:"status"`
+	CurrencyCode           string                    `json:"currency_code"`
+	SubtotalMinor          int64                     `json:"subtotal_minor"`
+	TotalMinor             int64                     `json:"total_minor"`
+	ConfirmationDeadlineAt time.Time                 `json:"confirmation_deadline_at"`
+	CreatedAt              time.Time                 `json:"created_at"`
+	Items                  []OrderCreatedItemPayload `json:"items"`
+}
+
+func NewOrderCreatedEvent(order Order, correlationID, causationID string, occurredAt time.Time) (events.EventEnvelope, error) {
+	if order.ID == "" || occurredAt.IsZero() {
+		return events.EventEnvelope{}, ErrInvalidInput
+	}
+	items := make([]OrderCreatedItemPayload, 0, len(order.Items))
+	for _, item := range order.Items {
+		items = append(items, OrderCreatedItemPayload{
+			ID:                   item.ID,
+			OrderID:              item.OrderID,
+			SellerListingID:      item.SellerListingID,
+			ProductID:            item.ProductID,
+			VariantID:            item.VariantID,
+			SKUID:                item.SKUID,
+			ProductTitleSnapshot: item.ProductTitleSnapshot,
+			SKUCodeSnapshot:      item.SKUCodeSnapshot,
+			UnitPriceMinor:       item.UnitPriceMinor,
+			CurrencyCode:         item.CurrencyCode,
+			Quantity:             item.Quantity,
+			LineTotalMinor:       item.LineTotalMinor,
+			CreatedAt:            item.CreatedAt,
+		})
+	}
+	payload := OrderCreatedPayload{
+		OrderID:                order.ID,
+		OrderNumber:            order.OrderNumber,
+		StoreID:                order.StoreID,
+		MarketCode:             order.MarketCode,
+		CustomerID:             order.CustomerID,
+		CheckoutSessionID:      order.CheckoutSessionID,
+		Status:                 order.Status,
+		CurrencyCode:           order.CurrencyCode,
+		SubtotalMinor:          order.SubtotalMinor,
+		TotalMinor:             order.TotalMinor,
+		ConfirmationDeadlineAt: order.ConfirmationDeadlineAt,
+		CreatedAt:              order.CreatedAt,
+		Items:                  items,
+	}
+
+	payloadMap, err := payloadToMap(payload)
+	if err != nil {
+		return events.EventEnvelope{}, err
+	}
+
+	aggregateVersion := order.AggregateVersion
+	if aggregateVersion == 0 {
+		aggregateVersion = 1
+	}
+
+	envelope := events.EventEnvelope{
+		EventID:          uuid.NewString(),
+		EventType:        EventTypeOrderCreated,
+		SchemaVersion:    1,
+		AggregateType:    "order",
+		AggregateID:      order.ID,
+		AggregateVersion: aggregateVersion,
+		CorrelationID:    correlationID,
+		CausationID:      causationID,
+		OccurredAt:       occurredAt,
+		Payload:          payloadMap,
+	}
+
+	if err := envelope.Validate(); err != nil {
+		return events.EventEnvelope{}, fmt.Errorf("validate order created event: %w", err)
 	}
 
 	return envelope, nil

@@ -54,12 +54,13 @@ func (s *server) handleEvaluateCheckoutSession(w http.ResponseWriter, r *http.Re
 		},
 		ContactEmail: body.ContactEmail,
 	}
-	decision, err := s.deps.Repo.EvaluateCheckoutSession(r.Context(), scope.StoreID(), request)
+	correlationID := httpx.CorrelationID(r.Context())
+	order, err := s.deps.Repo.FinalizeCheckout(r.Context(), scope.StoreID(), request, correlationID)
 	if err != nil {
 		writeDomainError(w, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, CheckoutDecisionResponse{SessionID: decision.SessionID, Status: decision.Status, Replay: decision.Replay})
+	httpx.WriteJSON(w, http.StatusOK, order.ToPublic())
 }
 
 func rPathSessionID(r *http.Request) string {
