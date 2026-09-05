@@ -4,12 +4,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/matjeroapps/core/packages/outbox"
 )
 
 type DBExecutor interface {
@@ -337,46 +340,152 @@ func (r Repository) loadOrderAddress(ctx context.Context, db DBExecutor, orderID
 	return addr, nil
 }
 
-// UpdateOrderStatus performs state transition validation and updates status, version, and appends a timeline entry.
-func (r Repository) UpdateOrderStatus(
-	ctx context.Context,
-	exec DBExecutor,
-	storeID, orderID string,
-	targetStatus string,
-	authority TransitionAuthority,
-	actorSubject *string,
-	reason *string,
-	decisionNow time.Time,
-) (Order, error) {
-	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" || strings.TrimSpace(targetStatus) == "" {
-		return Order{}, ErrInvalidInput
+func getDBClockTimestamp(ctx context.Context, exec DBExecutor) (time.Time, error) {
+	var ts time.Time
+	err := exec.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&ts)
+	if err != nil {
+		return time.Time{}, translatePGError(err, "select clock_timestamp")
 	}
-	if decisionNow.IsZero() {
-		return Order{}, ErrInvalidInput
-	}
-
-	if exec == nil {
-		var updated Order
-		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-			var err error
-			updated, err = r.updateOrderStatusExec(ctx, tx, storeID, orderID, targetStatus, authority, actorSubject, reason, decisionNow)
-			return err
-		})
-		return updated, err
-	}
-	return r.updateOrderStatusExec(ctx, exec, storeID, orderID, targetStatus, authority, actorSubject, reason, decisionNow)
+	return ts.UTC(), nil
 }
 
-func (r Repository) updateOrderStatusExec(
-	ctx context.Context,
-	db DBExecutor,
-	storeID, orderID string,
-	targetStatus string,
-	authority TransitionAuthority,
-	actorSubject *string,
-	reason *string,
-	decisionNow time.Time,
-) (Order, error) {
+func lockSnapshotsByIDs(ctx context.Context, exec DBExecutor, snapshotIDs []string) (map[string]InventorySnapshot, error) {
+	if len(snapshotIDs) == 0 {
+		return map[string]InventorySnapshot{}, nil
+	}
+	sortedIDs := make([]string, len(snapshotIDs))
+	copy(sortedIDs, snapshotIDs)
+	sort.Strings(sortedIDs)
+
+	rows, err := exec.Query(ctx, `
+		SELECT id, fulfillment_location_id, sku_id, on_hand_qty, reserved_qty, version, created_at, updated_at
+		FROM inventory_snapshots
+		WHERE id = ANY($1)
+		ORDER BY id ASC
+		FOR UPDATE
+	`, sortedIDs)
+	if err != nil {
+		return nil, translatePGError(err, "lock inventory snapshots")
+	}
+	defer rows.Close()
+
+	res := make(map[string]InventorySnapshot)
+	for rows.Next() {
+		var s InventorySnapshot
+		if err := rows.Scan(&s.ID, &s.FulfillmentLocationID, &s.SKUID, &s.OnHandQty, &s.ReservedQty, &s.Version, &s.CreatedAt, &s.UpdatedAt); err != nil {
+			return nil, translatePGError(err, "scan inventory snapshot")
+		}
+		res[s.ID] = s
+	}
+	if err := rows.Err(); err != nil {
+		return nil, translatePGError(err, "iterate inventory snapshots")
+	}
+	return res, nil
+}
+
+func lockReservationsByIDs(ctx context.Context, exec DBExecutor, reservationIDs []string) ([]InventoryReservation, error) {
+	if len(reservationIDs) == 0 {
+		return nil, nil
+	}
+	sortedIDs := make([]string, len(reservationIDs))
+	copy(sortedIDs, reservationIDs)
+	sort.Strings(sortedIDs)
+
+	rows, err := exec.Query(ctx, `
+		SELECT id, inventory_snapshot_id, quantity, status, reservation_token, expires_at, created_at, updated_at
+		FROM inventory_reservations
+		WHERE id = ANY($1)
+		ORDER BY id ASC
+		FOR UPDATE
+	`, sortedIDs)
+	if err != nil {
+		return nil, translatePGError(err, "lock inventory reservations")
+	}
+	defer rows.Close()
+
+	var reservations []InventoryReservation
+	for rows.Next() {
+		var r InventoryReservation
+		if err := rows.Scan(&r.ID, &r.InventorySnapshotID, &r.Quantity, &r.Status, &r.ReservationToken, &r.ExpiresAt, &r.CreatedAt, &r.UpdatedAt); err != nil {
+			return nil, translatePGError(err, "scan inventory reservation")
+		}
+		reservations = append(reservations, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, translatePGError(err, "iterate inventory reservations")
+	}
+	return reservations, nil
+}
+
+func requireTx(exec DBExecutor) (pgx.Tx, error) {
+	if exec == nil {
+		return nil, fmt.Errorf("transaction required: exec is nil")
+	}
+	tx, ok := exec.(pgx.Tx)
+	if !ok || tx == nil {
+		return nil, fmt.Errorf("transaction required: exec is not pgx.Tx")
+	}
+	return tx, nil
+}
+
+func isInventoryNeutralAdvance(from, to string, authority TransitionAuthority) bool {
+	if authority != AuthoritySeller {
+		return false
+	}
+	if from == OrderStatusConfirmed && to == OrderStatusProcessing {
+		return true
+	}
+	if from == OrderStatusProcessing && to == OrderStatusReadyForShipping {
+		return true
+	}
+	return false
+}
+
+var (
+	testHookAfterOrderLock      func(ctx context.Context, orderID string)
+	testHookBeforeOutboxEnqueue func(ctx context.Context) error
+)
+
+func enqueueStatusChangedEvent(ctx context.Context, exec DBExecutor, order Order, fromStatus, correlationID, causationID string, decisionNow time.Time) error {
+	if testHookBeforeOutboxEnqueue != nil {
+		if err := testHookBeforeOutboxEnqueue(ctx); err != nil {
+			return err
+		}
+	}
+	tx, ok := exec.(pgx.Tx)
+	if !ok {
+		return fmt.Errorf("outbox enqueue requires pgx.Tx")
+	}
+	envelope, err := NewOrderStatusChangedEvent(order, fromStatus, correlationID, causationID, decisionNow)
+	if err != nil {
+		return err
+	}
+	return outbox.NewStore().Enqueue(ctx, tx, envelope)
+}
+
+// ConfirmOrder performs the Seller pending -> confirmed inventory consumption transaction.
+func (r Repository) ConfirmOrder(ctx context.Context, exec DBExecutor, storeID, orderID string, actorSubject *string, correlationID string) (Order, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if exec == nil {
+		var res Order
+		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			res, err = r.confirmOrderExec(ctx, tx, storeID, orderID, actorSubject, correlationID)
+			return err
+		})
+		return res, err
+	}
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.confirmOrderExec(ctx, tx, storeID, orderID, actorSubject, correlationID)
+}
+
+func (r Repository) confirmOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, actorSubject *string, correlationID string) (Order, error) {
+	// 1. Lock Order FOR UPDATE
 	var order Order
 	err := db.QueryRow(ctx, `
 		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
@@ -393,15 +502,384 @@ func (r Repository) updateOrderStatusExec(
 		&order.CancellationReason, &order.AggregateVersion, &order.CreatedAt, &order.UpdatedAt,
 	)
 	if err != nil {
-		return Order{}, translatePGError(err, "lock order for transition")
+		return Order{}, translatePGError(err, "lock order for confirm")
 	}
 
-	if err := ValidateOrderTransition(order.Status, authority, targetStatus, order.ConfirmationDeadlineAt, decisionNow); err != nil {
+	if testHookAfterOrderLock != nil {
+		testHookAfterOrderLock(ctx, order.ID)
+	}
+
+	if order.Status == OrderStatusConfirmed {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil
+	}
+
+	if order.Status != OrderStatusPending {
+		return Order{}, ErrInvalidTransition
+	}
+
+	// 2. Capture decision_now = clock_timestamp() AFTER order lock
+	decisionNow, err := getDBClockTimestamp(ctx, db)
+	if err != nil {
 		return Order{}, err
 	}
 
+	// Validate deadline: decision_now < confirmation_deadline_at
+	if !decisionNow.Before(order.ConfirmationDeadlineAt) {
+		return Order{}, ErrInvalidTransition
+	}
+
+	items, err := r.loadOrderItems(ctx, db, order.ID)
+	if err != nil {
+		return Order{}, err
+	}
+	order.Items = items
+	addr, err := r.loadOrderAddress(ctx, db, order.ID)
+	if err == nil {
+		order.Address = &addr
+	}
+
+	if len(items) == 0 {
+		return Order{}, ErrInvalidInput
+	}
+
+	resIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
+		}
+		resIDs = append(resIDs, item.InventoryReservationID)
+	}
+
+	// Query distinct snapshot IDs linked to reservations
+	var snapIDs []string
+	rows, err := db.Query(ctx, `
+		SELECT DISTINCT inventory_snapshot_id
+		FROM inventory_reservations
+		WHERE id = ANY($1)
+		ORDER BY inventory_snapshot_id ASC
+	`, resIDs)
+	if err != nil {
+		return Order{}, translatePGError(err, "query snapshot ids for confirmation")
+	}
+	for rows.Next() {
+		var sID string
+		if err := rows.Scan(&sID); err != nil {
+			rows.Close()
+			return Order{}, translatePGError(err, "scan snapshot id")
+		}
+		snapIDs = append(snapIDs, sID)
+	}
+	rows.Close()
+
+	// 3. Lock linked Snapshots by id ASC
+	snapshots, err := lockSnapshotsByIDs(ctx, db, snapIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// 4. Lock linked Reservations by id ASC
+	reservations, err := lockReservationsByIDs(ctx, db, resIDs)
+	if err != nil {
+		return Order{}, err
+	}
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
+
+	// 5. Revalidate Reservation Invariants - Fail Closed if any mismatch occurs
+	for _, res := range reservations {
+		if res.Status != ReservationStatusHeld {
+			return Order{}, ErrInvalidTransition
+		}
+		if res.ExpiresAt == nil || !decisionNow.Before(*res.ExpiresAt) {
+			return Order{}, ErrInvalidTransition
+		}
+		if !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
+		}
+	}
+
+	// 6. Aggregate by snapshot
+	aggregates := AggregateReservationsBySnapshot(reservations)
+
+	// 7. Consume Inventory per snapshot
+	for _, agg := range aggregates {
+		snap, ok := snapshots[agg.SnapshotID]
+		if !ok {
+			return Order{}, ErrInvalidInput
+		}
+		newOnHand := snap.OnHandQty - agg.AggregateQuantity
+		newReserved := snap.ReservedQty - agg.AggregateQuantity
+		if newOnHand < 0 || newReserved < 0 || newReserved > newOnHand {
+			return Order{}, ErrInsufficientInventory
+		}
+
+		newVersion := snap.Version + 1
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_snapshots
+			SET on_hand_qty = $1, reserved_qty = $2, version = $3, updated_at = $4
+			WHERE id = $5 AND version = $6
+		`, newOnHand, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
+		if err != nil {
+			return Order{}, translatePGError(err, "update snapshot for confirm")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
+		}
+
+		movID := uuid.NewString()
+		_, err = db.Exec(ctx, `
+			INSERT INTO inventory_movements (id, inventory_snapshot_id, movement_type, quantity_delta, on_hand_qty, reserved_qty, reason, principal_subject, correlation_id, causation_id, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, 'seller_confirmation', 'seller', $7, '', $8)
+		`, movID, snap.ID, MovementTypeReservationConsumed, -agg.AggregateQuantity, newOnHand, newReserved, correlationID, decisionNow)
+		if err != nil {
+			return Order{}, translatePGError(err, "insert reservation_consumed movement")
+		}
+	}
+
+	// 8. Mark reservations consumed
+	cmdTag, err := db.Exec(ctx, `
+		UPDATE inventory_reservations
+		SET status = $1, updated_at = $2
+		WHERE id = ANY($3) AND status = $4
+	`, ReservationStatusConsumed, decisionNow, resIDs, ReservationStatusHeld)
+	if err != nil {
+		return Order{}, translatePGError(err, "update reservations to consumed")
+	}
+	if cmdTag.RowsAffected() != int64(len(resIDs)) {
+		return Order{}, ErrConflict
+	}
+
+	// 9. Update Order
 	fromStatus := order.Status
-	order.Status = targetStatus
+	order.Status = OrderStatusConfirmed
+	order.AggregateVersion++
+	order.UpdatedAt = decisionNow
+
+	commandTag, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = $1, aggregate_version = $2, updated_at = $3
+		WHERE id = $4 AND store_id = $5 AND status = $6
+	`, order.Status, order.AggregateVersion, order.UpdatedAt, order.ID, order.StoreID, fromStatus)
+	if err != nil {
+		return Order{}, translatePGError(err, "update order status to confirmed")
+	}
+	if commandTag.RowsAffected() == 0 {
+		return Order{}, ErrConflict
+	}
+
+	// 10. Append timeline
+	timelineID := uuid.NewString()
+	_, err = db.Exec(ctx, `
+		INSERT INTO order_timeline (id, order_id, from_status, to_status, actor_type, actor_subject, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, timelineID, order.ID, fromStatus, order.Status, string(AuthoritySeller), actorSubject, decisionNow)
+	if err != nil {
+		return Order{}, translatePGError(err, "append order timeline for confirm")
+	}
+
+	// 11. Outbox enqueue
+	if err := enqueueStatusChangedEvent(ctx, db, order, fromStatus, correlationID, "", decisionNow); err != nil {
+		return Order{}, err
+	}
+
+	return order, nil
+}
+
+// CancelPendingOrder performs pending -> cancelled transition releasing held reservations.
+func (r Repository) CancelPendingOrder(ctx context.Context, exec DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if authority == AuthorityScheduler {
+		return Order{}, ErrInvalidTransition
+	}
+	if authority != AuthorityCustomer && authority != AuthoritySeller {
+		return Order{}, ErrInvalidTransition
+	}
+	if exec == nil {
+		var res Order
+		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			res, err = r.cancelPendingOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
+			return err
+		})
+		return res, err
+	}
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.cancelPendingOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
+}
+
+func (r Repository) cancelPendingOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	// 1. Lock Order FOR UPDATE
+	var order Order
+	err := db.QueryRow(ctx, `
+		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
+		       status, currency_code, guest_order_access_token_digest, subtotal_minor,
+		       total_minor, confirmation_deadline_at, cancellation_reason, aggregate_version,
+		       created_at, updated_at
+		FROM orders
+		WHERE id = $1 AND store_id = $2
+		FOR UPDATE
+	`, orderID, storeID).Scan(
+		&order.ID, &order.OrderNumber, &order.StoreID, &order.MarketCode, &order.CustomerID,
+		&order.CheckoutSessionID, &order.Status, &order.CurrencyCode, &order.GuestOrderAccessTokenDigest,
+		&order.SubtotalMinor, &order.TotalMinor, &order.ConfirmationDeadlineAt,
+		&order.CancellationReason, &order.AggregateVersion, &order.CreatedAt, &order.UpdatedAt,
+	)
+	if err != nil {
+		return Order{}, translatePGError(err, "lock order for cancel pending")
+	}
+
+	if order.Status == OrderStatusCancelled {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil
+	}
+
+	if order.Status != OrderStatusPending {
+		return Order{}, ErrInvalidTransition
+	}
+
+	// 2. Capture decision_now = clock_timestamp() AFTER order lock
+	decisionNow, err := getDBClockTimestamp(ctx, db)
+	if err != nil {
+		return Order{}, err
+	}
+
+	items, err := r.loadOrderItems(ctx, db, order.ID)
+	if err != nil {
+		return Order{}, err
+	}
+	order.Items = items
+	addr, err := r.loadOrderAddress(ctx, db, order.ID)
+	if err == nil {
+		order.Address = &addr
+	}
+
+	resIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
+		}
+		resIDs = append(resIDs, item.InventoryReservationID)
+	}
+
+	var snapIDs []string
+	if len(resIDs) > 0 {
+		rows, err := db.Query(ctx, `
+			SELECT DISTINCT inventory_snapshot_id
+			FROM inventory_reservations
+			WHERE id = ANY($1)
+			ORDER BY inventory_snapshot_id ASC
+		`, resIDs)
+		if err != nil {
+			return Order{}, translatePGError(err, "query snapshot ids for pending cancel")
+		}
+		for rows.Next() {
+			var sID string
+			if err := rows.Scan(&sID); err != nil {
+				rows.Close()
+				return Order{}, translatePGError(err, "scan snapshot id")
+			}
+			snapIDs = append(snapIDs, sID)
+		}
+		rows.Close()
+	}
+
+	// 3. Lock linked Snapshots by id ASC
+	snapshots, err := lockSnapshotsByIDs(ctx, db, snapIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// 4. Lock linked Reservations by id ASC
+	reservations, err := lockReservationsByIDs(ctx, db, resIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// Fail closed if any reservation is missing or not held, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
+	for _, res := range reservations {
+		if res.Status != ReservationStatusHeld {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
+		}
+	}
+
+	aggregates := AggregateReservationsBySnapshot(reservations)
+
+	for _, agg := range aggregates {
+		snap, ok := snapshots[agg.SnapshotID]
+		if !ok {
+			return Order{}, ErrInvalidInput
+		}
+		newReserved := snap.ReservedQty - agg.AggregateQuantity
+		if newReserved < 0 {
+			return Order{}, ErrInternalError
+		}
+		newVersion := snap.Version + 1
+
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_snapshots
+			SET reserved_qty = $1, version = $2, updated_at = $3
+			WHERE id = $4 AND version = $5
+		`, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
+		if err != nil {
+			return Order{}, translatePGError(err, "update snapshot for pending cancel")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
+		}
+
+		movID := uuid.NewString()
+		reasonStr := "pending_cancellation"
+		if reason != nil {
+			reasonStr = *reason
+		}
+		_, err = db.Exec(ctx, `
+			INSERT INTO inventory_movements (id, inventory_snapshot_id, movement_type, quantity_delta, on_hand_qty, reserved_qty, reason, principal_subject, correlation_id, causation_id, created_at)
+			VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, '', $9)
+		`, movID, snap.ID, MovementTypeReservationReleased, snap.OnHandQty, newReserved, reasonStr, string(authority), correlationID, decisionNow)
+		if err != nil {
+			return Order{}, translatePGError(err, "insert reservation_released movement")
+		}
+	}
+
+	if len(resIDs) > 0 {
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_reservations
+			SET status = $1, updated_at = $2
+			WHERE id = ANY($3) AND status = $4
+		`, ReservationStatusReleased, decisionNow, resIDs, ReservationStatusHeld)
+		if err != nil {
+			return Order{}, translatePGError(err, "update reservations to released")
+		}
+		if cmdTag.RowsAffected() != int64(len(resIDs)) {
+			return Order{}, ErrConflict
+		}
+	}
+
+	fromStatus := order.Status
+	order.Status = OrderStatusCancelled
 	order.CancellationReason = reason
 	order.AggregateVersion++
 	order.UpdatedAt = decisionNow
@@ -412,20 +890,592 @@ func (r Repository) updateOrderStatusExec(
 		WHERE id = $5 AND store_id = $6 AND status = $7
 	`, order.Status, order.CancellationReason, order.AggregateVersion, order.UpdatedAt, order.ID, order.StoreID, fromStatus)
 	if err != nil {
-		return Order{}, translatePGError(err, "update order status")
+		return Order{}, translatePGError(err, "update order status to cancelled")
 	}
 	if commandTag.RowsAffected() == 0 {
 		return Order{}, ErrConflict
 	}
 
-	// Append timeline
 	timelineID := uuid.NewString()
 	_, err = db.Exec(ctx, `
 		INSERT INTO order_timeline (id, order_id, from_status, to_status, actor_type, actor_subject, reason, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`, timelineID, order.ID, fromStatus, order.Status, string(authority), actorSubject, reason, decisionNow)
 	if err != nil {
-		return Order{}, translatePGError(err, "append order timeline")
+		return Order{}, translatePGError(err, "append order timeline for pending cancel")
+	}
+
+	if err := enqueueStatusChangedEvent(ctx, db, order, fromStatus, correlationID, "", decisionNow); err != nil {
+		return Order{}, err
+	}
+
+	return order, nil
+}
+
+// CancelConfirmedOrder performs post-confirm cancellation restocking on hand inventory.
+func (r Repository) CancelConfirmedOrder(ctx context.Context, exec DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if authority != AuthoritySeller {
+		return Order{}, ErrInvalidTransition
+	}
+	if exec == nil {
+		var res Order
+		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			res, err = r.cancelConfirmedOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
+			return err
+		})
+		return res, err
+	}
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.cancelConfirmedOrderExec(ctx, tx, storeID, orderID, authority, actorSubject, reason, correlationID)
+}
+
+func (r Repository) cancelConfirmedOrderExec(ctx context.Context, db DBExecutor, storeID, orderID string, authority TransitionAuthority, actorSubject *string, reason *string, correlationID string) (Order, error) {
+	// 1. Lock Order FOR UPDATE
+	var order Order
+	err := db.QueryRow(ctx, `
+		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
+		       status, currency_code, guest_order_access_token_digest, subtotal_minor,
+		       total_minor, confirmation_deadline_at, cancellation_reason, aggregate_version,
+		       created_at, updated_at
+		FROM orders
+		WHERE id = $1 AND store_id = $2
+		FOR UPDATE
+	`, orderID, storeID).Scan(
+		&order.ID, &order.OrderNumber, &order.StoreID, &order.MarketCode, &order.CustomerID,
+		&order.CheckoutSessionID, &order.Status, &order.CurrencyCode, &order.GuestOrderAccessTokenDigest,
+		&order.SubtotalMinor, &order.TotalMinor, &order.ConfirmationDeadlineAt,
+		&order.CancellationReason, &order.AggregateVersion, &order.CreatedAt, &order.UpdatedAt,
+	)
+	if err != nil {
+		return Order{}, translatePGError(err, "lock order for cancel confirmed")
+	}
+
+	if order.Status == OrderStatusCancelled {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil
+	}
+
+	if order.Status != OrderStatusConfirmed && order.Status != OrderStatusProcessing {
+		return Order{}, ErrInvalidTransition
+	}
+
+	// 2. Capture decision_now = clock_timestamp() AFTER order lock
+	decisionNow, err := getDBClockTimestamp(ctx, db)
+	if err != nil {
+		return Order{}, err
+	}
+
+	items, err := r.loadOrderItems(ctx, db, order.ID)
+	if err != nil {
+		return Order{}, err
+	}
+	order.Items = items
+	addr, err := r.loadOrderAddress(ctx, db, order.ID)
+	if err == nil {
+		order.Address = &addr
+	}
+
+	resIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
+		}
+		resIDs = append(resIDs, item.InventoryReservationID)
+	}
+
+	var snapIDs []string
+	if len(resIDs) > 0 {
+		rows, err := db.Query(ctx, `
+			SELECT DISTINCT inventory_snapshot_id
+			FROM inventory_reservations
+			WHERE id = ANY($1)
+			ORDER BY inventory_snapshot_id ASC
+		`, resIDs)
+		if err != nil {
+			return Order{}, translatePGError(err, "query snapshot ids for post-confirm cancel")
+		}
+		for rows.Next() {
+			var sID string
+			if err := rows.Scan(&sID); err != nil {
+				rows.Close()
+				return Order{}, translatePGError(err, "scan snapshot id")
+			}
+			snapIDs = append(snapIDs, sID)
+		}
+		rows.Close()
+	}
+
+	// 3. Lock Snapshots by id ASC
+	snapshots, err := lockSnapshotsByIDs(ctx, db, snapIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// 4. Lock Reservations by id ASC
+	reservations, err := lockReservationsByIDs(ctx, db, resIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// Fail closed if any reservation is missing or not consumed, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
+	for _, res := range reservations {
+		if res.Status != ReservationStatusConsumed {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
+		}
+	}
+
+	aggregates := AggregateReservationsBySnapshot(reservations)
+
+	for _, agg := range aggregates {
+		snap, ok := snapshots[agg.SnapshotID]
+		if !ok {
+			return Order{}, ErrInvalidInput
+		}
+		newOnHand := snap.OnHandQty + agg.AggregateQuantity
+		newVersion := snap.Version + 1
+
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_snapshots
+			SET on_hand_qty = $1, version = $2, updated_at = $3
+			WHERE id = $4 AND version = $5
+		`, newOnHand, newVersion, decisionNow, snap.ID, snap.Version)
+		if err != nil {
+			return Order{}, translatePGError(err, "update snapshot for restock")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
+		}
+
+		movID := uuid.NewString()
+		reasonStr := "order_cancellation_restock"
+		if reason != nil {
+			reasonStr = *reason
+		}
+		_, err = db.Exec(ctx, `
+			INSERT INTO inventory_movements (id, inventory_snapshot_id, movement_type, quantity_delta, on_hand_qty, reserved_qty, reason, principal_subject, correlation_id, causation_id, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10)
+		`, movID, snap.ID, MovementTypeOrderCancellationRestock, agg.AggregateQuantity, newOnHand, snap.ReservedQty, reasonStr, string(authority), correlationID, decisionNow)
+		if err != nil {
+			return Order{}, translatePGError(err, "insert order_cancellation_restock movement")
+		}
+	}
+
+	fromStatus := order.Status
+	order.Status = OrderStatusCancelled
+	order.CancellationReason = reason
+	order.AggregateVersion++
+	order.UpdatedAt = decisionNow
+
+	commandTag, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = $1, cancellation_reason = $2, aggregate_version = $3, updated_at = $4
+		WHERE id = $5 AND store_id = $6 AND status = $7
+	`, order.Status, order.CancellationReason, order.AggregateVersion, order.UpdatedAt, order.ID, order.StoreID, fromStatus)
+	if err != nil {
+		return Order{}, translatePGError(err, "update order status to cancelled from confirmed")
+	}
+	if commandTag.RowsAffected() == 0 {
+		return Order{}, ErrConflict
+	}
+
+	timelineID := uuid.NewString()
+	_, err = db.Exec(ctx, `
+		INSERT INTO order_timeline (id, order_id, from_status, to_status, actor_type, actor_subject, reason, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, timelineID, order.ID, fromStatus, order.Status, string(authority), actorSubject, reason, decisionNow)
+	if err != nil {
+		return Order{}, translatePGError(err, "append order timeline for post-confirm cancel")
+	}
+
+	if err := enqueueStatusChangedEvent(ctx, db, order, fromStatus, correlationID, "", decisionNow); err != nil {
+		return Order{}, err
+	}
+
+	return order, nil
+}
+
+// ExpirePendingOrder executes Stage 2 of the confirmation-timeout expiry workflow for a single candidate Order.
+func (r Repository) ExpirePendingOrder(ctx context.Context, exec DBExecutor, orderID string) (Order, error) {
+	if strings.TrimSpace(orderID) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if exec == nil {
+		var res Order
+		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			res, err = r.expirePendingOrderExec(ctx, tx, orderID)
+			return err
+		})
+		return res, err
+	}
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.expirePendingOrderExec(ctx, tx, orderID)
+}
+
+func (r Repository) expirePendingOrderExec(ctx context.Context, db DBExecutor, orderID string) (Order, error) {
+	// 1. Lock Order FOR UPDATE
+	var order Order
+	err := db.QueryRow(ctx, `
+		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
+		       status, currency_code, guest_order_access_token_digest, subtotal_minor,
+		       total_minor, confirmation_deadline_at, cancellation_reason, aggregate_version,
+		       created_at, updated_at
+		FROM orders
+		WHERE id = $1
+		FOR UPDATE
+	`, orderID).Scan(
+		&order.ID, &order.OrderNumber, &order.StoreID, &order.MarketCode, &order.CustomerID,
+		&order.CheckoutSessionID, &order.Status, &order.CurrencyCode, &order.GuestOrderAccessTokenDigest,
+		&order.SubtotalMinor, &order.TotalMinor, &order.ConfirmationDeadlineAt,
+		&order.CancellationReason, &order.AggregateVersion, &order.CreatedAt, &order.UpdatedAt,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return Order{}, nil // Safe no-op if row not found
+		}
+		return Order{}, translatePGError(err, "lock order for expiry")
+	}
+
+	if testHookAfterOrderLock != nil {
+		testHookAfterOrderLock(ctx, order.ID)
+	}
+
+	if order.Status != OrderStatusPending {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil // Safe no-op if no longer pending
+	}
+
+	// 2. Capture decision_now = clock_timestamp() AFTER order lock
+	decisionNow, err := getDBClockTimestamp(ctx, db)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// Re-verify deadline: if decision_now < confirmation_deadline_at, no-op
+	if decisionNow.Before(order.ConfirmationDeadlineAt) {
+		return order, nil
+	}
+
+	items, err := r.loadOrderItems(ctx, db, order.ID)
+	if err != nil {
+		return Order{}, err
+	}
+	order.Items = items
+	addr, err := r.loadOrderAddress(ctx, db, order.ID)
+	if err == nil {
+		order.Address = &addr
+	}
+
+	resIDs := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.InventoryReservationID == "" {
+			return Order{}, ErrInvalidInput
+		}
+		resIDs = append(resIDs, item.InventoryReservationID)
+	}
+
+	var snapIDs []string
+	if len(resIDs) > 0 {
+		rows, err := db.Query(ctx, `
+			SELECT DISTINCT inventory_snapshot_id
+			FROM inventory_reservations
+			WHERE id = ANY($1)
+			ORDER BY inventory_snapshot_id ASC
+		`, resIDs)
+		if err != nil {
+			return Order{}, translatePGError(err, "query snapshot ids for expiry")
+		}
+		for rows.Next() {
+			var sID string
+			if err := rows.Scan(&sID); err != nil {
+				rows.Close()
+				return Order{}, translatePGError(err, "scan snapshot id for expiry")
+			}
+			snapIDs = append(snapIDs, sID)
+		}
+		rows.Close()
+	}
+
+	// 3. Lock linked Snapshots by id ASC
+	snapshots, err := lockSnapshotsByIDs(ctx, db, snapIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// 4. Lock linked Reservations by id ASC
+	reservations, err := lockReservationsByIDs(ctx, db, resIDs)
+	if err != nil {
+		return Order{}, err
+	}
+
+	// Fail closed if any reservation is missing or not held, or deadline mismatch
+	if len(reservations) != len(resIDs) {
+		return Order{}, ErrInternalError
+	}
+	for _, res := range reservations {
+		if res.Status != ReservationStatusHeld {
+			return Order{}, ErrInternalError
+		}
+		if res.ExpiresAt == nil || !res.ExpiresAt.Equal(order.ConfirmationDeadlineAt) {
+			return Order{}, ErrInternalError
+		}
+	}
+
+	aggregates := AggregateReservationsBySnapshot(reservations)
+
+	for _, agg := range aggregates {
+		snap, ok := snapshots[agg.SnapshotID]
+		if !ok {
+			return Order{}, ErrInvalidInput
+		}
+		newReserved := snap.ReservedQty - agg.AggregateQuantity
+		if newReserved < 0 {
+			return Order{}, ErrInternalError
+		}
+		newVersion := snap.Version + 1
+
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_snapshots
+			SET reserved_qty = $1, version = $2, updated_at = $3
+			WHERE id = $4 AND version = $5
+		`, newReserved, newVersion, decisionNow, snap.ID, snap.Version)
+		if err != nil {
+			return Order{}, translatePGError(err, "update snapshot for expiry")
+		}
+		if cmdTag.RowsAffected() == 0 {
+			return Order{}, ErrConflict
+		}
+
+		movID := uuid.NewString()
+		_, err = db.Exec(ctx, `
+			INSERT INTO inventory_movements (id, inventory_snapshot_id, movement_type, quantity_delta, on_hand_qty, reserved_qty, reason, principal_subject, correlation_id, causation_id, created_at)
+			VALUES ($1, $2, $3, 0, $4, $5, 'confirmation_timeout', 'scheduler', '', '', $6)
+		`, movID, snap.ID, MovementTypeReservationExpired, snap.OnHandQty, newReserved, decisionNow)
+		if err != nil {
+			return Order{}, translatePGError(err, "insert reservation_expired movement")
+		}
+	}
+
+	if len(resIDs) > 0 {
+		cmdTag, err := db.Exec(ctx, `
+			UPDATE inventory_reservations
+			SET status = $1, updated_at = $2
+			WHERE id = ANY($3) AND status = $4
+		`, ReservationStatusExpired, decisionNow, resIDs, ReservationStatusHeld)
+		if err != nil {
+			return Order{}, translatePGError(err, "update reservations to expired")
+		}
+		if cmdTag.RowsAffected() != int64(len(resIDs)) {
+			return Order{}, ErrConflict
+		}
+	}
+
+	fromStatus := order.Status
+	timeoutReason := "confirmation_timeout"
+	order.Status = OrderStatusCancelled
+	order.CancellationReason = &timeoutReason
+	order.AggregateVersion++
+	order.UpdatedAt = decisionNow
+
+	commandTag, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = $1, cancellation_reason = $2, aggregate_version = $3, updated_at = $4
+		WHERE id = $5 AND status = $6
+	`, order.Status, order.CancellationReason, order.AggregateVersion, order.UpdatedAt, order.ID, fromStatus)
+	if err != nil {
+		return Order{}, translatePGError(err, "update order status to cancelled for expiry")
+	}
+	if commandTag.RowsAffected() == 0 {
+		return order, nil
+	}
+
+	timelineID := uuid.NewString()
+	_, err = db.Exec(ctx, `
+		INSERT INTO order_timeline (id, order_id, from_status, to_status, actor_type, reason, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+	`, timelineID, order.ID, fromStatus, order.Status, string(AuthorityScheduler), timeoutReason, decisionNow)
+	if err != nil {
+		return Order{}, translatePGError(err, "append order timeline for expiry")
+	}
+
+	if err := enqueueStatusChangedEvent(ctx, db, order, fromStatus, "", "", decisionNow); err != nil {
+		return Order{}, err
+	}
+
+	return order, nil
+}
+
+// DiscoverExpiryCandidates executes Stage 1 of the confirmation-timeout scheduler.
+func (r Repository) DiscoverExpiryCandidates(ctx context.Context, exec DBExecutor, limit int) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	db := r.getExec(exec)
+	rows, err := db.Query(ctx, `
+		SELECT id
+		FROM orders
+		WHERE status = 'pending'
+		  AND confirmation_deadline_at <= clock_timestamp()
+		ORDER BY confirmation_deadline_at ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, translatePGError(err, "discover expiry candidates")
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, translatePGError(err, "scan expiry candidate id")
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, translatePGError(err, "iterate expiry candidates")
+	}
+	return ids, nil
+}
+
+// AdvanceOrderStatus performs inventory-neutral Order state transitions.
+func (r Repository) AdvanceOrderStatus(
+	ctx context.Context,
+	exec DBExecutor,
+	storeID, orderID string,
+	targetStatus string,
+	authority TransitionAuthority,
+	actorSubject *string,
+	reason *string,
+	correlationID string,
+) (Order, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" || strings.TrimSpace(targetStatus) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if exec == nil {
+		var res Order
+		err := r.withTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
+			var err error
+			res, err = r.advanceOrderStatusExec(ctx, tx, storeID, orderID, targetStatus, authority, actorSubject, reason, correlationID)
+			return err
+		})
+		return res, err
+	}
+	tx, err := requireTx(exec)
+	if err != nil {
+		return Order{}, err
+	}
+	return r.advanceOrderStatusExec(ctx, tx, storeID, orderID, targetStatus, authority, actorSubject, reason, correlationID)
+}
+
+func (r Repository) advanceOrderStatusExec(
+	ctx context.Context,
+	db DBExecutor,
+	storeID, orderID string,
+	targetStatus string,
+	authority TransitionAuthority,
+	actorSubject *string,
+	reason *string,
+	correlationID string,
+) (Order, error) {
+	// 1. Lock Order FOR UPDATE
+	var order Order
+	err := db.QueryRow(ctx, `
+		SELECT id, order_number, store_id, market_code, customer_id, checkout_session_id,
+		       status, currency_code, guest_order_access_token_digest, subtotal_minor,
+		       total_minor, confirmation_deadline_at, cancellation_reason, aggregate_version,
+		       created_at, updated_at
+		FROM orders
+		WHERE id = $1 AND store_id = $2
+		FOR UPDATE
+	`, orderID, storeID).Scan(
+		&order.ID, &order.OrderNumber, &order.StoreID, &order.MarketCode, &order.CustomerID,
+		&order.CheckoutSessionID, &order.Status, &order.CurrencyCode, &order.GuestOrderAccessTokenDigest,
+		&order.SubtotalMinor, &order.TotalMinor, &order.ConfirmationDeadlineAt,
+		&order.CancellationReason, &order.AggregateVersion, &order.CreatedAt, &order.UpdatedAt,
+	)
+	if err != nil {
+		return Order{}, translatePGError(err, "lock order for advance status")
+	}
+
+	if order.Status == targetStatus {
+		items, _ := r.loadOrderItems(ctx, db, order.ID)
+		order.Items = items
+		addr, _ := r.loadOrderAddress(ctx, db, order.ID)
+		if addr.ID != "" {
+			order.Address = &addr
+		}
+		return order, nil
+	}
+
+	// Restrict to whitelisted inventory-neutral transitions only: confirmed -> processing, processing -> ready_for_shipping
+	if !isInventoryNeutralAdvance(order.Status, targetStatus, authority) {
+		return Order{}, ErrInvalidTransition
+	}
+
+	// 2. Capture decision_now = clock_timestamp() AFTER order lock
+	decisionNow, err := getDBClockTimestamp(ctx, db)
+	if err != nil {
+		return Order{}, err
+	}
+
+	if err := ValidateOrderTransition(order.Status, authority, targetStatus, order.ConfirmationDeadlineAt, decisionNow); err != nil {
+		return Order{}, err
+	}
+
+	fromStatus := order.Status
+	order.Status = targetStatus
+	if reason != nil {
+		order.CancellationReason = reason
+	}
+	order.AggregateVersion++
+	order.UpdatedAt = decisionNow
+
+	commandTag, err := db.Exec(ctx, `
+		UPDATE orders
+		SET status = $1, cancellation_reason = $2, aggregate_version = $3, updated_at = $4
+		WHERE id = $5 AND store_id = $6 AND status = $7
+	`, order.Status, order.CancellationReason, order.AggregateVersion, order.UpdatedAt, order.ID, order.StoreID, fromStatus)
+	if err != nil {
+		return Order{}, translatePGError(err, "update order status advance")
+	}
+	if commandTag.RowsAffected() == 0 {
+		return Order{}, ErrConflict
+	}
+
+	timelineID := uuid.NewString()
+	_, err = db.Exec(ctx, `
+		INSERT INTO order_timeline (id, order_id, from_status, to_status, actor_type, actor_subject, reason, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, timelineID, order.ID, fromStatus, order.Status, string(authority), actorSubject, reason, decisionNow)
+	if err != nil {
+		return Order{}, translatePGError(err, "append order timeline for advance status")
 	}
 
 	items, err := r.loadOrderItems(ctx, db, order.ID)
@@ -437,7 +1487,91 @@ func (r Repository) updateOrderStatusExec(
 		order.Address = &addr
 	}
 
+	if err := enqueueStatusChangedEvent(ctx, db, order, fromStatus, correlationID, "", decisionNow); err != nil {
+		return Order{}, err
+	}
+
 	return order, nil
+}
+
+// UpdateOrderStatus delegates to appropriate transition execution command.
+func (r Repository) UpdateOrderStatus(
+	ctx context.Context,
+	exec DBExecutor,
+	storeID, orderID string,
+	targetStatus string,
+	authority TransitionAuthority,
+	actorSubject *string,
+	reason *string,
+	decisionNow time.Time,
+) (Order, error) {
+	if strings.TrimSpace(storeID) == "" || strings.TrimSpace(orderID) == "" || strings.TrimSpace(targetStatus) == "" {
+		return Order{}, ErrInvalidInput
+	}
+	if authority == AuthorityScheduler {
+		return Order{}, ErrInvalidTransition
+	}
+
+	db := r.getExec(exec)
+	var currentStatus string
+	err := db.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 AND store_id = $2`, orderID, storeID).Scan(&currentStatus)
+	if err != nil {
+		return Order{}, translatePGError(err, "peek order status for transition")
+	}
+
+	if currentStatus == targetStatus {
+		return r.GetOrderByID(ctx, exec, storeID, orderID)
+	}
+
+	switch currentStatus {
+	case OrderStatusPending:
+		switch targetStatus {
+		case OrderStatusConfirmed:
+			if authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.ConfirmOrder(ctx, exec, storeID, orderID, actorSubject, "")
+		case OrderStatusCancelled:
+			if authority != AuthorityCustomer && authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.CancelPendingOrder(ctx, exec, storeID, orderID, authority, actorSubject, reason, "")
+		default:
+			return Order{}, ErrInvalidTransition
+		}
+	case OrderStatusConfirmed:
+		switch targetStatus {
+		case OrderStatusProcessing:
+			if authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.AdvanceOrderStatus(ctx, exec, storeID, orderID, targetStatus, authority, actorSubject, reason, "")
+		case OrderStatusCancelled:
+			if authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.CancelConfirmedOrder(ctx, exec, storeID, orderID, authority, actorSubject, reason, "")
+		default:
+			return Order{}, ErrInvalidTransition
+		}
+	case OrderStatusProcessing:
+		switch targetStatus {
+		case OrderStatusReadyForShipping:
+			if authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.AdvanceOrderStatus(ctx, exec, storeID, orderID, targetStatus, authority, actorSubject, reason, "")
+		case OrderStatusCancelled:
+			if authority != AuthoritySeller {
+				return Order{}, ErrInvalidTransition
+			}
+			return r.CancelConfirmedOrder(ctx, exec, storeID, orderID, authority, actorSubject, reason, "")
+		default:
+			return Order{}, ErrInvalidTransition
+		}
+	default:
+		return Order{}, ErrInvalidTransition
+	}
 }
 
 // AppendTimeline appends an immutable entry to order_timeline.

@@ -13,4 +13,5 @@ var (
 	ErrIdempotencyConflict   = errors.New("idempotency conflict")
 	ErrCheckoutCartInvariant = errors.New("checkout cart status invariant")
 	ErrInvalidTransition     = errors.New("invalid order transition")
+	ErrInternalError         = errors.New("internal error")
 )

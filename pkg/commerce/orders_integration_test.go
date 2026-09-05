@@ -23,6 +23,7 @@ func setupP53Database(t *testing.T) (*database.Pool, Repository, context.Context
 	}
 	db := testdb.Open(t, dsn)
 	for _, name := range []string{
+		"000001_event_delivery_foundation",
 		"000002_market_reference_data",
 		"000003_commerce_domain_schema",
 		"000004_admin_supplier_seller_platforms",
@@ -604,39 +605,10 @@ func TestP53OperationalLineageDeletionRestrictions(t *testing.T) {
 func TestP53OrderStateMachineTransitionsAndVersion(t *testing.T) {
 	db, repo, ctx := setupP53Database(t)
 	suffix := uuid.NewString()
-	store, _, session, _ := createTestStoreAndSession(t, db, repo, ctx, suffix)
 
-	orderNumber, _ := repo.AllocateOrderNumber(ctx, nil, store.ID)
-	now := time.Now().UTC()
-	deadline := now.Add(30 * time.Minute)
-
-	order := Order{
-		ID:                          uuid.NewString(),
-		OrderNumber:                 orderNumber,
-		StoreID:                     store.ID,
-		MarketCode:                  "EG",
-		CheckoutSessionID:           session.ID,
-		Status:                      OrderStatusPending,
-		CurrencyCode:                "EGP",
-		GuestOrderAccessTokenDigest: session.GuestOrderAccessTokenDigest,
-		SubtotalMinor:               1000,
-		TotalMinor:                  1000,
-		ConfirmationDeadlineAt:      deadline,
-		AggregateVersion:            1,
-		CreatedAt:                   now,
-		UpdatedAt:                   now,
-	}
-
-	created, err := repo.CreateOrder(ctx, nil, order)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if created.AggregateVersion != 1 || created.Status != OrderStatusPending {
-		t.Fatalf("initial order version/status mismatch: %+v", created)
-	}
-
-	// 1. Invalid transition (Customer attempting PENDING -> CONFIRMED) returns ErrInvalidTransition and leaves version/status unchanged
-	if _, err := repo.UpdateOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthorityCustomer, nil, nil, now.Add(time.Minute)); !errors.Is(err, ErrInvalidTransition) {
+	// 1. Invalid transition (Customer attempting PENDING -> CONFIRMED) returns ErrInvalidTransition
+	store, order, _, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix+"-1", 10, 2, 2, 30*time.Minute)
+	if _, err := repo.UpdateOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthorityCustomer, nil, nil, time.Now().UTC()); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("expected ErrInvalidTransition for customer confirm, got %v", err)
 	}
 	unchanged, _ := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
@@ -645,17 +617,17 @@ func TestP53OrderStateMachineTransitionsAndVersion(t *testing.T) {
 	}
 
 	// 2. Seller confirmation after deadline returns ErrInvalidTransition
-	if _, err := repo.UpdateOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthoritySeller, nil, nil, deadline.Add(time.Second)); !errors.Is(err, ErrInvalidTransition) {
+	storeLate, orderLate, _, _ := createTestOrderWithInventory(t, db, repo, ctx, suffix+"-late", 10, 2, 2, -10*time.Minute)
+	if _, err := repo.UpdateOrderStatus(ctx, nil, storeLate.ID, orderLate.ID, OrderStatusConfirmed, AuthoritySeller, nil, nil, time.Now().UTC()); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("expected ErrInvalidTransition for confirm after deadline, got %v", err)
 	}
-	unchangedAfterDeadline, _ := repo.GetOrderByID(ctx, nil, store.ID, order.ID)
+	unchangedAfterDeadline, _ := repo.GetOrderByID(ctx, nil, storeLate.ID, orderLate.ID)
 	if unchangedAfterDeadline.Status != OrderStatusPending || unchangedAfterDeadline.AggregateVersion != 1 {
 		t.Fatalf("order status or version changed after late confirm attempt")
 	}
 
 	// 3. Valid Seller confirmation before deadline updates status to CONFIRMED and increments version to 2
-	decisionNow := now.Add(5 * time.Minute)
-	confirmed, err := repo.UpdateOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthoritySeller, nil, nil, decisionNow)
+	confirmed, err := repo.UpdateOrderStatus(ctx, nil, store.ID, order.ID, OrderStatusConfirmed, AuthoritySeller, nil, nil, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("valid seller confirm failed: %v", err)
 	}

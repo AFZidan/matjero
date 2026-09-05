@@ -22,6 +22,7 @@ const (
 	EventTypeSKUUpserted           = "commerce.sku.upserted.v1"
 	EventTypeSupplierOfferUpserted = "commerce.supplier_offer.upserted.v1"
 	EventTypeSellerListingUpserted = "commerce.seller_listing.upserted.v1"
+	EventTypeOrderStatusChanged    = "commerce.order.status_changed.v1"
 )
 
 type SearchTranslation struct {
@@ -166,6 +167,69 @@ func NewSKUUpsertedEvent(payload SKUSearchPayload, aggregateVersion int64, corre
 
 func NewSupplierOfferUpsertedEvent(payload SupplierOfferSearchPayload, aggregateVersion int64, correlationID, causationID string) (events.EventEnvelope, error) {
 	return newCommerceEvent(EventTypeSupplierOfferUpserted, "supplier_offer", payload.ID, aggregateVersion, correlationID, causationID, payload)
+}
+
+type OrderStatusChangedPayload struct {
+	OrderID            string    `json:"order_id"`
+	OrderNumber        string    `json:"order_number"`
+	StoreID            string    `json:"store_id"`
+	MarketCode         string    `json:"market_code"`
+	CustomerID         *string   `json:"customer_id,omitempty"`
+	Status             string    `json:"status"`
+	FromStatus         *string   `json:"from_status,omitempty"`
+	CurrencyCode       string    `json:"currency_code"`
+	SubtotalMinor      int64     `json:"subtotal_minor"`
+	TotalMinor         int64     `json:"total_minor"`
+	CancellationReason *string   `json:"cancellation_reason,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+func NewOrderStatusChangedEvent(order Order, fromStatus string, correlationID, causationID string, decisionNow time.Time) (events.EventEnvelope, error) {
+	if order.ID == "" {
+		return events.EventEnvelope{}, ErrInvalidInput
+	}
+	var fromStatusPtr *string
+	if fromStatus != "" {
+		fromStatusPtr = &fromStatus
+	}
+	payload := OrderStatusChangedPayload{
+		OrderID:            order.ID,
+		OrderNumber:        order.OrderNumber,
+		StoreID:            order.StoreID,
+		MarketCode:         order.MarketCode,
+		CustomerID:         order.CustomerID,
+		Status:             order.Status,
+		FromStatus:         fromStatusPtr,
+		CurrencyCode:       order.CurrencyCode,
+		SubtotalMinor:      order.SubtotalMinor,
+		TotalMinor:         order.TotalMinor,
+		CancellationReason: order.CancellationReason,
+		UpdatedAt:          decisionNow,
+	}
+
+	payloadMap, err := payloadToMap(payload)
+	if err != nil {
+		return events.EventEnvelope{}, err
+	}
+
+	envelope := events.EventEnvelope{
+		EventID:          uuid.NewString(),
+		EventType:        EventTypeOrderStatusChanged,
+		SchemaVersion:    1,
+		AggregateType:    "order",
+		AggregateID:      order.ID,
+		AggregateVersion: order.AggregateVersion,
+		CorrelationID:    correlationID,
+		CausationID:      causationID,
+		OccurredAt:       decisionNow,
+		Payload:          payloadMap,
+	}
+
+	if err := envelope.Validate(); err != nil {
+		return events.EventEnvelope{}, fmt.Errorf("validate order status changed event: %w", err)
+	}
+
+	return envelope, nil
 }
 
 func NewSellerListingUpsertedEvent(payload SellerListingSearchPayload, aggregateVersion int64, correlationID, causationID string) (events.EventEnvelope, error) {
