@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"github.com/matjeroapps/core/internal/serviceauth"
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/i18n"
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
 )
 
 type previewStubCatalog struct {

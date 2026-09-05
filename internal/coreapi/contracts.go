@@ -5,9 +5,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/contracts"
-	"github.com/matjeroapps/core/pkg/themes"
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/contracts"
+	"github.com/matjeroapps/core/modules/themes"
 )
 
 // Internal request and response contracts.

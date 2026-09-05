@@ -7,11 +7,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/matjeroapps/core/modules/api"
+	"github.com/matjeroapps/core/modules/markets"
 	"github.com/matjeroapps/core/packages/auth"
 	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/i18n"
-	"github.com/matjeroapps/core/pkg/api"
-	"github.com/matjeroapps/core/pkg/markets"
 )
 
 type Config struct {

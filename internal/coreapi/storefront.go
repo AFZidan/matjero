@@ -10,10 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/matjeroapps/core/internal/serviceauth"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/i18n"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
 )
 
 // Storefront handlers expose the P4.3 public catalog read model over the

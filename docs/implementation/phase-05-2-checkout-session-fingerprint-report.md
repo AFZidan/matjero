@@ -14,7 +14,7 @@ approved `open`, `finalized`, and `expired` states, Store/Cart/Customer
 composite tenant constraints, indexes, and a required 32-byte guest capability
 digest. Its down migration drops only this table.
 
-`pkg/commerce/checkout_session.go` owns the Checkout Session model, creation,
+`modules/commerce/checkout_session.go` owns the Checkout Session model, creation,
 lock-linearized evaluation, and fingerprint primitive. Session creation locks
 the Cart, requires an active Cart, generates a dedicated 32-byte cryptographic
 capability, stores only its SHA-256 digest, and returns the raw capability once.

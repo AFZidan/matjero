@@ -14,7 +14,7 @@ import (
 
 	"github.com/matjeroapps/core/internal/serviceauth"
 	"github.com/matjeroapps/core/internal/testdb"
-	"github.com/matjeroapps/core/pkg/commerce"
+	"github.com/matjeroapps/core/modules/commerce"
 )
 
 func setupSupplierRetailAPI(t *testing.T) (context.Context, commerce.Repository, commerce.Service, http.Handler) {

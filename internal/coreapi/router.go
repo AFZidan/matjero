@@ -18,11 +18,11 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/matjeroapps/core/internal/serviceauth"
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/markets"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/i18n"
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/markets"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
 )
 
 // CatalogReader is the public catalog read model. storefront.CatalogRepository

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/modules/commerce"
 	"github.com/matjeroapps/core/packages/database"
-	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 func applySQLFileStorefront(t *testing.T, db *database.Pool, path string) {

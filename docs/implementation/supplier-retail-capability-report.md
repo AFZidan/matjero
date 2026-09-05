@@ -62,7 +62,7 @@ All writes occur in a single PostgreSQL transaction. Existing `supplier_members`
 - **Concurrent Provisioning**: Barrier-synchronized integration tests prove that concurrent requests for the same Supplier result in exactly 1 successful creation and 1 `ErrConflict` error, leaving exactly 1 affiliation and 0 orphan rows for the losing transaction.
 
 ### 7. Store Creation & Shared Primitive
-Store creation logic was refactored into a shared private primitive `createStoreForSeller(...)` in `pkg/commerce`. Both `CreateStoreForSubject` (Seller flow) and `CreateSupplierStoreForSubject` (Supplier Retail flow) reuse identical reserved subdomain validation, platform domain allocation, and atomic store + domain creation logic.
+Store creation logic was refactored into a shared private primitive `createStoreForSeller(...)` in `modules/commerce`. Both `CreateStoreForSubject` (Seller flow) and `CreateSupplierStoreForSubject` (Supplier Retail flow) reuse identical reserved subdomain validation, platform domain allocation, and atomic store + domain creation logic.
 
 ### 8. Sourcing Invariants & Derive OWN vs NETWORK
 - `Store` -> `SellerListing` -> `SupplierOffer` -> `Supplier`.
@@ -99,7 +99,7 @@ The following internal endpoints are registered under `/internal/v1` and scoped 
 ## Verification & Testing
 
 ### Automated Test Suite
-- `pkg/commerce`:
+- `modules/commerce`:
   - `TestMigration000009_UpAndDown`: Validates 000009 up/down migration cycle and 1:1 database uniqueness constraints.
   - `TestSupplierRetailCapability_AtomicProvisioning`: Validates atomic creation of seller, settings, seller member, and affiliation, plus rollback on conflict.
   - `TestSupplierRetailCapability_MembershipIsolation`: Validates that only initiating subject receives seller owner role and other supplier members are isolated.

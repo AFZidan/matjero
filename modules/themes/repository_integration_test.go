@@ -14,8 +14,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/matjeroapps/core/internal/testdb"
+	"github.com/matjeroapps/core/modules/commerce"
 	"github.com/matjeroapps/core/packages/database"
-	"github.com/matjeroapps/core/pkg/commerce"
 )
 
 type themesTestEnv struct {

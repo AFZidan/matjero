@@ -4,11 +4,11 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/markets"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/httpx"
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/markets"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
 )
 
 // Internal error contract (ADR-017).

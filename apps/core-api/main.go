@@ -17,15 +17,15 @@ import (
 
 	"github.com/matjeroapps/core/internal/coreapi"
 	"github.com/matjeroapps/core/internal/serviceauth"
+	"github.com/matjeroapps/core/modules/commerce"
+	"github.com/matjeroapps/core/modules/markets"
+	"github.com/matjeroapps/core/modules/storefront"
+	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/config"
 	"github.com/matjeroapps/core/packages/database"
 	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/logging"
 	"github.com/matjeroapps/core/packages/observability"
-	"github.com/matjeroapps/core/pkg/commerce"
-	"github.com/matjeroapps/core/pkg/markets"
-	"github.com/matjeroapps/core/pkg/storefront"
-	"github.com/matjeroapps/core/pkg/themes"
 )
 
 // ErrNoServiceCredentials is returned when the internal API would start without

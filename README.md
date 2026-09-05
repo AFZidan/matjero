@@ -25,7 +25,7 @@ audit matrices, runtime smoke results, and known limitations.
 
 | Local folder | GitHub repository | Owns |
 | --- | --- | --- |
-| `core` (this repo) | [`matjeroapps/core`](https://github.com/matjeroapps/core) | Commerce/theme/market/storefront domain logic, Core-internal `packages/*` and `pkg/*`, centralized `migrations/`, background workers, local infrastructure |
+| `core` (this repo) | [`matjeroapps/core`](https://github.com/matjeroapps/core) | Commerce/theme/market/storefront domain logic, Core-internal `packages/*` and `modules/*`, centralized `migrations/`, background workers, local infrastructure |
 | `admin` | [`matjeroapps/admin`](https://github.com/matjeroapps/admin) | Admin API, admin OpenAPI document, admin dashboard |
 | `seller` | [`matjeroapps/seller`](https://github.com/matjeroapps/seller) | Seller API + Storefront API, theme HTTP surface, seller dashboard, storefront web app |
 | `supplier` | [`matjeroapps/supplier`](https://github.com/matjeroapps/supplier) | Supplier API, supplier OpenAPI document, supplier dashboard |
@@ -42,6 +42,21 @@ migrations, and no actor repository connects to the commerce database.
 > time. That model is superseded by ADR-017. The packages still exist and are
 > still used by Core's own applications, but they are no longer a cross-repository
 > contract and may change without coordinating an actor release.
+
+## Architecture Layout
+
+```text
+apps
+  ↓
+modules
+  ↓
+packages
+```
+
+- `modules/`: Core-specific domain and application modules (`commerce`, `catalog`, `markets`, `storefront`, `themes`, `contracts`, `openapi`, `actorapi`, `actorhttp`, `api`).
+- `packages/`: Shared technical, platform, and infrastructure primitives (`database`, `events`, `outbox`, `money`, etc.).
+
+`packages/*` should not gain dependencies on `modules/*`.
 
 ## Internal API
 

@@ -33,8 +33,8 @@ The canonical git commit SHAs recorded at Phase 4 completion baseline are:
 | :--- | :--- | :---: | :---: | :---: | :---: | :--- | :---: |
 | **P4.0** | `core` | #6 | `cabad67a6cc42147a1b2a36769bf2fba29c35e11` | `0955f7ff930523f51b851338b3886a2d684c985a` | MERGED | `docs/implementation/phase-04-native-storefront-theme-engine.md` | PASS |
 | **P4.1** | `core` | #7 | `12a7b427ef62b19658bd71d19bf0549760ca6276` | `016f8f45d6bd2c76621f61fa78240ee51701f804` | MERGED | `internal/storefront/store_resolver.go` | PASS |
-| **P4.2** | `core` | #8 | `54ab9c68b4def05bf0aeb3e2cc9ddba87a7801ee` | `8378f32590dba083050ac2b619ba5cbf511a38dd` | MERGED | `pkg/themes/service.go` | PASS |
-| **P4.3** | `core` | #12 | `c6167b96201af306db7074a9c045c9f025b7d268` | `c63d084863d517599853b48bb3c262685a7b6ec9` | MERGED | `pkg/storefront/catalog_repository.go` | PASS |
+| **P4.2** | `core` | #8 | `54ab9c68b4def05bf0aeb3e2cc9ddba87a7801ee` | `8378f32590dba083050ac2b619ba5cbf511a38dd` | MERGED | `modules/themes/service.go` | PASS |
+| **P4.3** | `core` | #12 | `c6167b96201af306db7074a9c045c9f025b7d268` | `c63d084863d517599853b48bb3c262685a7b6ec9` | MERGED | `modules/storefront/catalog_repository.go` | PASS |
 | **P4.3** | `seller` | #1 | `cc2149fc3a1dc64fb4a9720635ee4950217da137` | `b2441ee169f4ac614d3924c65ac74d314843d072` | MERGED | `internal/storefrontapi/router.go` | PASS |
 | **Repo Indep.** | `core` | #13 | `cfba60226045c051174dc91094aa3a82700b382a` | `bfc9721cf628bed1985c917a66c053970e9fce1e` | MERGED | `docs/implementation/repository-independence-report.md` | PASS |
 | **Repo Indep.** | `core` | #14 | `01432bf0872eb79bc184fb057df93951a1583d23` | `1336f05751c2c47001d833ca201b748bfa37f793` | MERGED | N/A | PASS |
@@ -45,7 +45,7 @@ The canonical git commit SHAs recorded at Phase 4 completion baseline are:
 | **Repo Indep.** | `admin` | #2 | `df7fba1879fd683d6465ed67aac9decd3f99bec9` | `c42c79bcf5698235784070ceb38e078caf38c982` | MERGED | N/A | PASS |
 | **Repo Indep.** | `supplier` | #1 | `65b1fc4c22de9d1413d4074a1729016821f797f9` | `ba89cd608fbd91155de976aa108f040d6a8af38c` | MERGED | N/A | PASS |
 | **Repo Indep.** | `supplier` | #2 | `e87d6d4586ed03f1a008fe6e39ab9bc3ba6c4b95` | `0d601c81b9ecd5b486f45a690f4e9a716efd12d5` | MERGED | N/A | PASS |
-| **P4.4** | `core` | #16 | `6834206be529621c2e6d615d4f6506342bdad620` | `5f1e0b75de1b645a9b3b33e7c394a453a1570323` | MERGED | `pkg/commerce/storefront_revision.go` | PASS |
+| **P4.4** | `core` | #16 | `6834206be529621c2e6d615d4f6506342bdad620` | `5f1e0b75de1b645a9b3b33e7c394a453a1570323` | MERGED | `modules/commerce/storefront_revision.go` | PASS |
 | **P4.4** | `seller` | #4 | `638ec8d2e9f20e3dbb7227746ee03f3a6fa42eb6` | `a9d28d1f68252a0feba42205a73520897fb569b8` | MERGED | `internal/storefrontcache/cache.go` | PASS |
 | **P4.5** | `seller` | #5 | `5b0cc0c47d821cf6dbd2a8b3b6c469d37c784b23` | `c4675d78420a7399aabc4a2dd4b17602d78adc72` | MERGED | `web/storefront/src/app/[locale]/(store)/` | PASS |
 | **P4.6** | `seller` | #6 | `637dd1d386e08507c7093b1092045f748eff436e` | `c7798b6ca0782a7d5eac367037a695bf8569483c` | MERGED | `web/storefront/src/server/seo.ts` | PASS |
@@ -55,7 +55,7 @@ The canonical git commit SHAs recorded at Phase 4 completion baseline are:
 | **P4.7** | `seller` | #8 | `2cff72ef337a3f83c74b7cc3148424cca209d676` | `bf70c50af50ca8ed1f9a09ab4f5eb7bf2bee7892` | MERGED | N/A | PASS |
 | **P4.7** | `seller` | #9 | `4e2a26f22a128218358cac574b5e955abeb1fefc` | `acc613d1c3fde592d2c4915de5127861cfca5456` | MERGED | `web/seller/src/components/ThemeEditorPanel.tsx` | PASS |
 | **P4.7** | `seller` | #10 | `8ba140e1d48b12ad4e8a1a246142d8d56a2e3940` | `2c1a09b61d7ac809c229c81c861392f7d6d574ac` | MERGED | N/A | PASS |
-| **P4.8A**| `core` | #20 | `781e8e928035708cbbcd73372b4f18e1751c7ed4` | `96cf98e5a1f1de3f388a86e316b5b59414d49d11` | MERGED | `pkg/commerce/domain_lifecycle.go` | PASS |
+| **P4.8A**| `core` | #20 | `781e8e928035708cbbcd73372b4f18e1751c7ed4` | `96cf98e5a1f1de3f388a86e316b5b59414d49d11` | MERGED | `modules/commerce/domain_lifecycle.go` | PASS |
 | **P4.8B**| `seller` | #11 | `29b96a4716a30e9fe6253bf7d9c8fcaec45de531` | `1354a9ab2d4e001b5ac5ac13aaac958aa69505c7` | MERGED | `internal/sellerapi/domains.go` | PASS |
 | **P4.8C**| `admin` | #3 | `e1b5c65b828a78cf910b04481ad509493d0161c0` | `5b9d16c26a52c4faa0cd7193d975841cb1ecde7f` | MERGED | N/A | PASS |
 | **P4.8C**| `admin` | #4 | `6d22220c5a75610051855832c6b1f2308d334397` | `c611db032a35096663e0013f5211b943d582428a` | MERGED | `docs/implementation/admin-domain-moderation-report.md` | PASS |
@@ -130,7 +130,7 @@ The Theme Engine follows platform-controlled governance ([ADR-011](../plans/adr/
 
 ## 7. Public Catalog / Pricing / Privacy
 
-The public catalog read model (`pkg/storefront/catalog_repository.go`) exposes store-scoped product listings:
+The public catalog read model (`modules/storefront/catalog_repository.go`) exposes store-scoped product listings:
 
 - **Seller Price Authority**: Customers see only the active **Seller Listing Price**.
 - **Supplier Privacy**: Supplier cost, wholesale price, supplier margins, supplier identity, contact details, and internal fulfillment metadata are strictly stripped and never serialized in public DTOs.

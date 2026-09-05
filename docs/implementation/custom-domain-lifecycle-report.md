@@ -171,7 +171,7 @@ Core exposes internal capabilities under `/internal/v1`:
 
 ## 9. Verification & Testing Summary
 
-1. `GOWORK=off go test -v ./pkg/commerce/...`:
+1. `GOWORK=off go test -v ./modules/commerce/...`:
    - `TestValidateCustomDomain`: Green
    - `TestDNSFormatting` & `TestFakeTXTResolver`: Green
    - `TestStoreDomainLifecycleIntegration`: Green (Seller isolation, custom validation, DNS state machine, custom activation, admin disable fallback/enable, platform enable fallback, concurrent activation).

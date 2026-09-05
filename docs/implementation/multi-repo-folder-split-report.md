@@ -76,12 +76,12 @@ records them as renames (similarity 86–100%).
 
 | From | To | Reason |
 | --- | --- | --- |
-| `internal/actorapi/` | `pkg/actorapi/` | Shared router construction used by every actor API |
-| `internal/api/` | `pkg/api/` | Shared bootstrap used by every actor `main.go` |
-| `internal/commerce/` | `pkg/commerce/` | Commerce domain, repository, service — stays in Core, consumed by all actors |
-| `internal/markets/` | `pkg/markets/` | Market reference data domain |
-| `internal/storefront/` | `pkg/storefront/` | Store/host resolution used by the Storefront API |
-| `internal/themes/` | `pkg/themes/` | Theme domain, repository, validation, persistence — stays in Core |
+| `internal/actorapi/` | `modules/actorapi/` | Shared router construction used by every actor API |
+| `internal/api/` | `modules/api/` | Shared bootstrap used by every actor `main.go` |
+| `internal/commerce/` | `modules/commerce/` | Commerce domain, repository, service — stays in Core, consumed by all actors |
+| `internal/markets/` | `modules/markets/` | Market reference data domain |
+| `internal/storefront/` | `modules/storefront/` | Store/host resolution used by the Storefront API |
+| `internal/themes/` | `modules/themes/` | Theme domain, repository, validation, persistence — stays in Core |
 
 `internal/testdb/` deliberately **stayed internal**: it is a Core-only
 integration-test helper and no sibling needs it.
@@ -95,7 +95,7 @@ repositories need. Each exists because the corresponding code was previously
 package-private inside `internal/platformapi/` and is now consumed across a
 repository boundary.
 
-### `pkg/actorhttp/` — shared actor HTTP helpers
+### `modules/actorhttp/` — shared actor HTTP helpers
 
 Previously unexported helpers in `internal/platformapi`. Exported verbatim with
 identical behavior:
@@ -110,26 +110,26 @@ identical behavior:
 | `ResolveSupplierID`, `ResolveSellerID` | unchanged |
 | `WriteCommerceError(w,err)` | `ErrInvalidInput`→400 `validation_error`; `ErrNotFound`→404 `not_found`; `ErrConflict`→409 `conflict`; `ErrMarketMismatch`→409 `market_mismatch`; `ErrInsufficientInventory`→409 `insufficient_inventory`; default→500 `internal_error` |
 
-### `pkg/contracts/` — generic response envelopes
+### `modules/contracts/` — generic response envelopes
 
 Five DTOs shared by more than one actor, extracted so they are defined exactly
 once: `CollectionResponse[T]` (`items`), `StatusResponse` (`status`),
 `CountResponse` (`counts`), `MarketsResponse` (`markets`),
 `StatusUpdateRequest` (`status`).
 
-### `pkg/openapi/` — code-first spec generation
+### `modules/openapi/` — code-first spec generation
 
 Moved from `internal/openapi/` and split so that the generic machinery is public
 and the per-actor documents live in each sibling.
 
 | File | Content | Origin |
 | --- | --- | --- |
-| `pkg/openapi/spec.go` | `RouteSpec`, `ParameterSpec`, `ResponseSpec`, `DocumentSpec`, `BuildDocument`, `MarshalDocument`, `ValidateDocument`, `NewSpecHandler` | `git mv` from `internal/openapi/spec.go` (98% similarity) |
-| `pkg/openapi/http.go` | `RouterConfig`, `NewRouter` (defaults `/openapi.json`, `/docs`) | `git mv` from `internal/openapi/http.go` (100%) |
-| `pkg/openapi/routes.go` | `ActorRoutes`, `CommonTags`, `ListResponses[T]`, `AuthReadResponses`, `AuthCreatedResponses`, `AuthOKResponses`, `OKResponse`, `CreatedResponse`, `ErrorResponse`, `LimitParam`, `OffsetParam`, `PathStringParam`, `StringParam` | Extracted from the shared portion of the monorepo `internal/openapi` package |
-| `pkg/openapi/http_test.go` | `TestDocsRouterEnabledDisabled`, `TestActorRoutesAuthToggle` | Extracted from the monorepo spec tests |
+| `modules/openapi/spec.go` | `RouteSpec`, `ParameterSpec`, `ResponseSpec`, `DocumentSpec`, `BuildDocument`, `MarshalDocument`, `ValidateDocument`, `NewSpecHandler` | `git mv` from `internal/openapi/spec.go` (98% similarity) |
+| `modules/openapi/http.go` | `RouterConfig`, `NewRouter` (defaults `/openapi.json`, `/docs`) | `git mv` from `internal/openapi/http.go` (100%) |
+| `modules/openapi/routes.go` | `ActorRoutes`, `CommonTags`, `ListResponses[T]`, `AuthReadResponses`, `AuthCreatedResponses`, `AuthOKResponses`, `OKResponse`, `CreatedResponse`, `ErrorResponse`, `LimitParam`, `OffsetParam`, `PathStringParam`, `StringParam` | Extracted from the shared portion of the monorepo `internal/openapi` package |
+| `modules/openapi/http_test.go` | `TestDocsRouterEnabledDisabled`, `TestActorRoutesAuthToggle` | Extracted from the monorepo spec tests |
 
-One value change was required inside `pkg/openapi/spec.go`: the money type's
+One value change was required inside `modules/openapi/spec.go`: the money type's
 reflected `PkgPath` is now
 `github.com/matjeroapps/core/packages/money`. This does not alter generated
 output, which is proven byte-identical in section 8.
@@ -213,7 +213,7 @@ redesign.
 1. **Sibling `internal/openapi/aliases.go`.** Each sibling's extracted
    `specs.go` referenced package-private identifiers (`actorRoutes`,
    `authReadResponses`, `limitParam`, …) that now live in Core's public
-   `pkg/openapi`. Rather than rewriting hundreds of call sites, each sibling has
+   `modules/openapi`. Rather than rewriting hundreds of call sites, each sibling has
    a small `aliases.go` that re-binds the Core exports to their original
    lowercase names via type aliases and function values. This keeps the
    extracted route definitions byte-for-byte closer to the monorepo original.
@@ -321,8 +321,8 @@ pseudo-version) and the `go.work` file becomes optional.
 | `matjeroapps/seller` | pass | pass | clean | pass |
 | `matjeroapps/supplier` | pass | pass | clean | pass |
 
-Core test packages green: `pkg/actorapi`, `pkg/commerce`, `pkg/markets`,
-`pkg/openapi`, `pkg/storefront`, `pkg/themes`,
+Core test packages green: `modules/actorapi`, `modules/commerce`, `modules/markets`,
+`modules/openapi`, `modules/storefront`, `modules/themes`,
 `packages/{auth,config,events,httpx,i18n,money}`.
 
 ### Frontend — three actor repositories
@@ -384,7 +384,7 @@ sibling READMEs point at it.
 - **Migrations remain centralized in Core `migrations/`**, including
   `000007_theme_engine_schema`. No sibling contains a migration file, and every
   sibling README states this explicitly.
-- **Theme domain stays in Core** (`pkg/themes`: domain, repository, validation,
+- **Theme domain stays in Core** (`modules/themes`: domain, repository, validation,
   persistence). `matjeroapps/seller` owns only the theme HTTP surface, the dashboard
   screens, and storefront rendering. The `THEME_PREVIEW_SECRET` fail-closed 503
   `preview_unavailable` behavior is unchanged and documented in the seller
@@ -402,8 +402,8 @@ sibling READMEs point at it.
  41 renames (internal/ → pkg/)
  52 deletions (extracted to siblings)
  14 modifications
-  5 additions (pkg/actorhttp, pkg/contracts, pkg/openapi/routes.go,
-               pkg/openapi/http_test.go, extraction manifest)
+  5 additions (modules/actorhttp, modules/contracts, modules/openapi/routes.go,
+               modules/openapi/http_test.go, extraction manifest)
 ```
 
 The large deletion count reflects code moving out to siblings, not code being

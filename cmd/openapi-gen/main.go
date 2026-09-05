@@ -14,7 +14,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 
 	"github.com/matjeroapps/core/internal/coreapi"
-	"github.com/matjeroapps/core/pkg/openapi"
+	"github.com/matjeroapps/core/modules/openapi"
 )
 
 func main() {

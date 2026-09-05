@@ -62,29 +62,29 @@ Module pins found in actor `go.mod` files:
 | seller, admin, supplier | `packages/database` | `apps/*/main.go` | `Connect`, `Pool` | A | Remove where no actor-owned persistence exists; otherwise localize |
 | seller, admin, supplier | `packages/logging` | `apps/*/main.go` | `New` | A | Localize as `internal/logging` |
 | seller, admin, supplier | `packages/observability` | `apps/*/main.go` | `Init`, `Shutdown` | A | Localize as `internal/observability` |
-| seller, admin, supplier | `pkg/actorapi` | `apps/*/main.go` | `NewRouter`, `Config`, `MarketService` | A | Localize as `internal/actorapi` (bootstrap + markets routes) |
-| seller, admin, supplier | `pkg/actorhttp` | `internal/{seller,admin,supplier}api/*` | `ParsePage`, `SubjectFrom`, `DecodeJSON`, `TranslationInput`, `UpdateStatusHandler`, `ResolveSellerID`, `ResolveSupplierID`, `WriteCommerceError` | A | Localize as `internal/actorhttp` |
-| seller, admin, supplier | `pkg/contracts` | `internal/sellerapi/themes.go`, openapi specs | `CollectionResponse`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | A | Localize as `internal/contracts` |
-| seller, admin, supplier | `pkg/openapi` | `internal/openapi/aliases.go`, `internal/openapi/specs.go` | `RouteSpec`, `ParameterSpec`, `ResponseSpec`, `DocumentSpec`, `RouterConfig`, `BuildDocument`, `MarshalDocument`, `ValidateDocument`, `NewSpecHandler`, `NewRouter`, `ActorRoutes`, `CommonTags`, response/param helpers | A | Localize as `internal/openapi` |
-| seller, admin, supplier | `pkg/api` | via `pkg/openapi`, `pkg/actorapi` | `Bootstrap`, `NewBootstrap` | A | Localize alongside openapi/actorapi |
+| seller, admin, supplier | `modules/actorapi` | `apps/*/main.go` | `NewRouter`, `Config`, `MarketService` | A | Localize as `internal/actorapi` (bootstrap + markets routes) |
+| seller, admin, supplier | `modules/actorhttp` | `internal/{seller,admin,supplier}api/*` | `ParsePage`, `SubjectFrom`, `DecodeJSON`, `TranslationInput`, `UpdateStatusHandler`, `ResolveSellerID`, `ResolveSupplierID`, `WriteCommerceError` | A | Localize as `internal/actorhttp` |
+| seller, admin, supplier | `modules/contracts` | `internal/sellerapi/themes.go`, openapi specs | `CollectionResponse`, `StatusResponse`, `CountResponse`, `MarketsResponse`, `StatusUpdateRequest` | A | Localize as `internal/contracts` |
+| seller, admin, supplier | `modules/openapi` | `internal/openapi/aliases.go`, `internal/openapi/specs.go` | `RouteSpec`, `ParameterSpec`, `ResponseSpec`, `DocumentSpec`, `RouterConfig`, `BuildDocument`, `MarshalDocument`, `ValidateDocument`, `NewSpecHandler`, `NewRouter`, `ActorRoutes`, `CommonTags`, response/param helpers | A | Localize as `internal/openapi` |
+| seller, admin, supplier | `modules/api` | via `modules/openapi`, `modules/actorapi` | `Bootstrap`, `NewBootstrap` | A | Localize alongside openapi/actorapi |
 
 ### B. Business / application capability
 
 | Repo | Core package | Files using it | Symbols consumed | Class | Replacement |
 | --- | --- | --- | --- | --- | --- |
-| seller | `pkg/storefront` | `internal/storefrontapi/router.go`, `contracts.go`, `apps/storefront-api/main.go` | `CatalogRepository`, `CatalogScope`, `NewCatalogScope`, `StoreResolver`, `NewStoreResolver`, `ResolvedStore`, `DomainFromRequest`, `NormalizeHost`, `StoreBootstrap`, `CategoryNode`, `ProductQuery`, `ProductPage`, `ProductListItem`, `ProductDetail`, `ErrStoreNotFound`, `ErrDomainInactive`, `ErrStoreInactive`, `ErrCatalogNotFound`, `ErrInvalidQuery` | B | `GET /internal/v1/storefront/*` |
-| seller, admin, supplier | `pkg/commerce` | all actor routers, `apps/*/main.go` | `Repository` (≈40 methods), `Service` (14 methods), `Page`, `SupplierCatalogFilter`, `ProductTranslation`, and all domain models (`Seller`, `Supplier`, `Store`, `Product`, `Category`, `SupplierOffer`, `SellerListing`, `InventorySnapshot`, `InventoryMovement`, `FulfillmentLocation`, `SupplierMarket`, `SupplierProduct`, …) | B | `GET/POST/PUT /internal/v1/{sellers,suppliers,stores,products,categories,offers,listings,inventory,locations}/*` |
-| seller, admin, supplier | `pkg/markets` | `apps/*/main.go`, `pkg/actorapi` (transitively) | `NewService`, `NewRepository`, `Market`, `ErrNotFound` | B | `GET /internal/v1/markets`, `GET /internal/v1/markets/{code}` |
-| seller | `pkg/themes` | `internal/sellerapi/themes.go`, `apps/seller-api/main.go` | `Service`, `NewService`, `Repository`, `Options`, `Theme`, `ThemeVersion`, `ThemeInstallation`, `ErrNotFound`, `ErrConflict`, `ErrSchemaMismatch`, `ErrUnsafeContent`, `ErrInvalidInput`, `ErrPreviewNotConfigured` | B | `GET/POST/PUT /internal/v1/themes/*`, `/internal/v1/stores/{id}/theme/*` |
+| seller | `modules/storefront` | `internal/storefrontapi/router.go`, `contracts.go`, `apps/storefront-api/main.go` | `CatalogRepository`, `CatalogScope`, `NewCatalogScope`, `StoreResolver`, `NewStoreResolver`, `ResolvedStore`, `DomainFromRequest`, `NormalizeHost`, `StoreBootstrap`, `CategoryNode`, `ProductQuery`, `ProductPage`, `ProductListItem`, `ProductDetail`, `ErrStoreNotFound`, `ErrDomainInactive`, `ErrStoreInactive`, `ErrCatalogNotFound`, `ErrInvalidQuery` | B | `GET /internal/v1/storefront/*` |
+| seller, admin, supplier | `modules/commerce` | all actor routers, `apps/*/main.go` | `Repository` (≈40 methods), `Service` (14 methods), `Page`, `SupplierCatalogFilter`, `ProductTranslation`, and all domain models (`Seller`, `Supplier`, `Store`, `Product`, `Category`, `SupplierOffer`, `SellerListing`, `InventorySnapshot`, `InventoryMovement`, `FulfillmentLocation`, `SupplierMarket`, `SupplierProduct`, …) | B | `GET/POST/PUT /internal/v1/{sellers,suppliers,stores,products,categories,offers,listings,inventory,locations}/*` |
+| seller, admin, supplier | `modules/markets` | `apps/*/main.go`, `modules/actorapi` (transitively) | `NewService`, `NewRepository`, `Market`, `ErrNotFound` | B | `GET /internal/v1/markets`, `GET /internal/v1/markets/{code}` |
+| seller | `modules/themes` | `internal/sellerapi/themes.go`, `apps/seller-api/main.go` | `Service`, `NewService`, `Repository`, `Options`, `Theme`, `ThemeVersion`, `ThemeInstallation`, `ErrNotFound`, `ErrConflict`, `ErrSchemaMismatch`, `ErrUnsafeContent`, `ErrInvalidInput`, `ErrPreviewNotConfigured` | B | `GET/POST/PUT /internal/v1/themes/*`, `/internal/v1/stores/{id}/theme/*` |
 
 ### C. Test-only dependencies
 
 | Repo | Core dependency | Files | Symbols consumed | Class | Replacement |
 | --- | --- | --- | --- | --- | --- |
 | seller | Core migrations via `go list -m -f '{{.Dir}}' github.com/matjeroapps/core` | `internal/storefrontapi/testdb_test.go` | `000002`–`000007` `.up.sql` files | C | Delete; replace with actor-local fake Core HTTP server |
-| seller | `pkg/commerce` (test fixtures) | `internal/storefrontapi/router_test.go`, `privacy_test.go` | `NewRepository`, `CreateSeller`, `CreateStoreWithDomain`, `CreateSupplier`, `CreateSupplierMarket`, `CreateFulfillmentLocation`, `CreateProduct`, `CreateSupplierOffer`, `CreateSellerListing`, … | C | Delete; business correctness stays in Core, transport correctness uses stubs |
-| seller | `pkg/storefront` (test wiring) | `internal/storefrontapi/router_test.go` | `NewCatalogRepository`, `NewStoreResolver` | C | Delete |
-| seller | `pkg/actorapi`, `pkg/markets` (test wiring) | `internal/storefrontapi/router_test.go` | `NewRouter`, `NewService`, `NewRepository` | C | Localize actorapi; stub markets |
+| seller | `modules/commerce` (test fixtures) | `internal/storefrontapi/router_test.go`, `privacy_test.go` | `NewRepository`, `CreateSeller`, `CreateStoreWithDomain`, `CreateSupplier`, `CreateSupplierMarket`, `CreateFulfillmentLocation`, `CreateProduct`, `CreateSupplierOffer`, `CreateSellerListing`, … | C | Delete; business correctness stays in Core, transport correctness uses stubs |
+| seller | `modules/storefront` (test wiring) | `internal/storefrontapi/router_test.go` | `NewCatalogRepository`, `NewStoreResolver` | C | Delete |
+| seller | `modules/actorapi`, `modules/markets` (test wiring) | `internal/storefrontapi/router_test.go` | `NewRouter`, `NewService`, `NewRepository` | C | Localize actorapi; stub markets |
 
 ### D. Dead / unused
 
