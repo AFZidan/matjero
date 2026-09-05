@@ -69,8 +69,10 @@ func run(ctx context.Context) error {
 	defer db.Close()
 
 	repo := commerce.NewRepository(db.Pool)
+	repo.OrderConfirmationDuration = cfg.OrderConfirmationDuration
 	service := commerce.NewService(repo)
 	service.CheckoutSessionLifetime = cfg.CheckoutSessionLifetime
+	service.OrderConfirmationDuration = cfg.OrderConfirmationDuration
 	service.PlatformDomain = cfg.PlatformDomain
 	service.ReservedSubdomains = cfg.ReservedSubdomains
 

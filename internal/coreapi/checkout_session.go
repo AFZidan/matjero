@@ -54,7 +54,7 @@ func (s *server) handleEvaluateCheckoutSession(w http.ResponseWriter, r *http.Re
 		},
 		ContactEmail: body.ContactEmail,
 	}
-	correlationID := r.Header.Get("X-Correlation-ID")
+	correlationID := httpx.CorrelationID(r.Context())
 	order, err := s.deps.Repo.FinalizeCheckout(r.Context(), scope.StoreID(), request, correlationID)
 	if err != nil {
 		writeDomainError(w, err)

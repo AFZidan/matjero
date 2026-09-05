@@ -9,17 +9,18 @@ import (
 )
 
 type Config struct {
-	ServiceName             string
-	Environment             string
-	HTTPAddr                string
-	DatabaseURL             string
-	RedisAddr               string
-	RabbitMQURL             string
-	ZitadelIssuer           string
-	ZitadelAudience         string
-	OpenAPIDocsEnabled      bool
-	ShutdownTimeout         time.Duration
-	CheckoutSessionLifetime time.Duration
+	ServiceName               string
+	Environment               string
+	HTTPAddr                  string
+	DatabaseURL               string
+	RedisAddr                 string
+	RabbitMQURL               string
+	ZitadelIssuer             string
+	ZitadelAudience           string
+	OpenAPIDocsEnabled        bool
+	ShutdownTimeout           time.Duration
+	CheckoutSessionLifetime   time.Duration
+	OrderConfirmationDuration time.Duration
 
 	// PlatformDomain is the base domain under which platform-generated store
 	// subdomains are allocated (e.g. "<store-code>.matjero.com"). It is
@@ -59,23 +60,28 @@ func Load(serviceName string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	orderConfirmationDuration, err := durationEnv("ORDER_CONFIRMATION_DURATION", 15*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
-		ServiceName:             serviceName,
-		Environment:             stringEnv("APP_ENV", "development"),
-		HTTPAddr:                stringEnv("HTTP_ADDR", ":8080"),
-		DatabaseURL:             stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
-		RedisAddr:               stringEnv("REDIS_ADDR", "localhost:6379"),
-		RabbitMQURL:             stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
-		ZitadelIssuer:           stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
-		ZitadelAudience:         stringEnv("ZITADEL_AUDIENCE", serviceName),
-		OpenAPIDocsEnabled:      boolEnv("OPENAPI_DOCS_ENABLED", stringEnv("APP_ENV", "development") != "production"),
-		ShutdownTimeout:         time.Duration(timeoutSeconds) * time.Second,
-		CheckoutSessionLifetime: checkoutSessionLifetime,
-		PlatformDomain:          stringEnv("PLATFORM_DOMAIN", "matjero.com"),
-		TrustedForwardedHost:    boolEnv("TRUSTED_FORWARDED_HOST", false),
-		ReservedSubdomains:      stringSliceEnv("RESERVED_SUBDOMAINS", []string{"www", "api", "admin", "app", "cdn", "mail", "seller", "supplier", "static", "assets"}),
-		ThemePreviewSecret:      stringEnv("THEME_PREVIEW_SECRET", ""),
+		ServiceName:               serviceName,
+		Environment:               stringEnv("APP_ENV", "development"),
+		HTTPAddr:                  stringEnv("HTTP_ADDR", ":8080"),
+		DatabaseURL:               stringEnv("DATABASE_URL", "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"),
+		RedisAddr:                 stringEnv("REDIS_ADDR", "localhost:6379"),
+		RabbitMQURL:               stringEnv("RABBITMQ_URL", "amqp://commerce:commerce@localhost:5672/"),
+		ZitadelIssuer:             stringEnv("ZITADEL_ISSUER", "http://localhost:8081"),
+		ZitadelAudience:           stringEnv("ZITADEL_AUDIENCE", serviceName),
+		OpenAPIDocsEnabled:        boolEnv("OPENAPI_DOCS_ENABLED", stringEnv("APP_ENV", "development") != "production"),
+		ShutdownTimeout:           time.Duration(timeoutSeconds) * time.Second,
+		CheckoutSessionLifetime:   checkoutSessionLifetime,
+		OrderConfirmationDuration: orderConfirmationDuration,
+		PlatformDomain:            stringEnv("PLATFORM_DOMAIN", "matjero.com"),
+		TrustedForwardedHost:      boolEnv("TRUSTED_FORWARDED_HOST", false),
+		ReservedSubdomains:        stringSliceEnv("RESERVED_SUBDOMAINS", []string{"www", "api", "admin", "app", "cdn", "mail", "seller", "supplier", "static", "assets"}),
+		ThemePreviewSecret:        stringEnv("THEME_PREVIEW_SECRET", ""),
 
 		InternalSellerToken:   stringEnv("CORE_INTERNAL_SELLER_TOKEN", ""),
 		InternalAdminToken:    stringEnv("CORE_INTERNAL_ADMIN_TOKEN", ""),

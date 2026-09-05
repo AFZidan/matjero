@@ -3,12 +3,14 @@ package coreapi
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matjeroapps/core/internal/serviceauth"
 	"github.com/matjeroapps/core/internal/testdb"
@@ -17,6 +19,7 @@ import (
 	"github.com/matjeroapps/core/modules/storefront"
 	"github.com/matjeroapps/core/modules/themes"
 	"github.com/matjeroapps/core/packages/database"
+	"github.com/matjeroapps/core/packages/httpx"
 	"github.com/matjeroapps/core/packages/money"
 )
 
@@ -63,6 +66,7 @@ func setupIntegration(t *testing.T) integrationEnv {
 	db := testdb.Open(t, dsn)
 
 	for _, name := range []string{
+		"000001_event_delivery_foundation",
 		"000002_market_reference_data",
 		"000003_commerce_domain_schema",
 		"000004_admin_supplier_seller_platforms",
@@ -73,6 +77,7 @@ func setupIntegration(t *testing.T) integrationEnv {
 		"000009_supplier_retail_capability",
 		"000010_customer_cart_domain",
 		"000011_checkout_sessions",
+		"000012_order_aggregate_schema",
 	} {
 		applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", name+".up.sql"))
 	}
@@ -107,7 +112,9 @@ func setupIntegration(t *testing.T) integrationEnv {
 		Revisions: storefront.NewRevisionReader(resolver, repo),
 		Themes:    themeService,
 	}
-	env.handler = serviceauth.Middleware(testAuthConfig())(NewRouter(deps))
+	appRouter := httpx.NewRouter(httpx.App{})
+	appRouter.Mount("/", serviceauth.Middleware(testAuthConfig())(NewRouter(deps)))
+	env.handler = appRouter
 
 	env.seed(t)
 	return env
@@ -649,6 +656,7 @@ func TestIntegrationThemePreviewFailsClosedWithoutSecret(t *testing.T) {
 	}
 	db := testdb.Open(t, dsn)
 	for _, name := range []string{
+		"000001_event_delivery_foundation",
 		"000002_market_reference_data",
 		"000003_commerce_domain_schema",
 		"000004_admin_supplier_seller_platforms",
@@ -659,6 +667,7 @@ func TestIntegrationThemePreviewFailsClosedWithoutSecret(t *testing.T) {
 		"000009_supplier_retail_capability",
 		"000010_customer_cart_domain",
 		"000011_checkout_sessions",
+		"000012_order_aggregate_schema",
 	} {
 		applyMigrationFile(t, db, filepath.Join("..", "..", "migrations", name+".up.sql"))
 	}
@@ -675,7 +684,9 @@ func TestIntegrationThemePreviewFailsClosedWithoutSecret(t *testing.T) {
 		// No PreviewSecret: the service must fail closed.
 		Themes: themes.NewService(themes.NewRepository(db.Pool), repo, themes.Options{}),
 	}
-	handler := serviceauth.Middleware(testAuthConfig())(NewRouter(deps))
+	appRouter := httpx.NewRouter(httpx.App{})
+	appRouter.Mount("/", serviceauth.Middleware(testAuthConfig())(NewRouter(deps)))
+	handler := appRouter
 
 	req := authenticatedRequest(t, http.MethodPost, "/internal/v1/stores/any-store/theme/preview", "seller", testSellerToken)
 	req.Header.Set(serviceauth.HeaderSubject, "subject-of-seller-a")
@@ -689,5 +700,89 @@ func TestIntegrationThemePreviewFailsClosedWithoutSecret(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "token") {
 		t.Errorf("response must not contain a token: %q", rec.Body.String())
+	}
+}
+
+func TestIntegrationFinalizeCheckoutCorrelationIDPropagation(t *testing.T) {
+	env := setupIntegration(t)
+	ctx := env.ctx
+
+	// Setup item, cart, session
+	_, cartToken, err := env.repo.CreateCart(ctx, env.storeA.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var skuID string
+	if err := env.db.QueryRow(ctx, `SELECT id FROM skus LIMIT 1`).Scan(&skuID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.repo.AddCartItem(ctx, env.storeA.ID, cartToken, skuID, 1); err != nil {
+		t.Fatal(err)
+	}
+	session, _, err := env.repo.CreateCheckoutSession(ctx, env.storeA.ID, cartToken, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. HTTP request WITHOUT X-Correlation-ID header
+	bodyJSON := `{"shipping_address":{"recipient_name":"Alice","address_line_1":"123 St","city":"Cairo","country_code":"EG"},"contact_email":"alice@example.com"}`
+	req := authenticatedRequest(t, http.MethodPost, "/internal/v1/storefront/checkout-sessions/"+session.ID+"/finalize", "seller", testSellerToken)
+	req.Header.Set(serviceauth.HeaderStorefrontHost, env.domainA)
+	req.Body = io.NopCloser(strings.NewReader(bodyJSON))
+	rec := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("finalize without correlation header status = %d (body %q)", rec.Code, rec.Body.String())
+	}
+
+	var res commerce.Order
+	if err := json.NewDecoder(rec.Body).Decode(&res); err != nil {
+		t.Fatal(err)
+	}
+
+	var generatedCorrID string
+	if err := env.db.QueryRow(ctx, `SELECT correlation_id FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'commerce.order.created.v1'`, res.ID).Scan(&generatedCorrID); err != nil {
+		t.Fatal(err)
+	}
+	if generatedCorrID == "" {
+		t.Fatal("expected non-empty generated correlation_id in outbox event")
+	}
+
+	// 2. HTTP request WITH caller-supplied X-Correlation-Id header
+	_, cartToken2, err := env.repo.CreateCart(ctx, env.storeA.ID, "EG", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.repo.AddCartItem(ctx, env.storeA.ID, cartToken2, skuID, 1); err != nil {
+		t.Fatal(err)
+	}
+	session2, _, err := env.repo.CreateCheckoutSession(ctx, env.storeA.ID, cartToken2, nil, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req2 := authenticatedRequest(t, http.MethodPost, "/internal/v1/storefront/checkout-sessions/"+session2.ID+"/finalize", "seller", testSellerToken)
+	req2.Header.Set(serviceauth.HeaderStorefrontHost, env.domainA)
+	req2.Header.Set("X-Correlation-Id", "caller-supplied-corr-123")
+	req2.Body = io.NopCloser(strings.NewReader(bodyJSON))
+	rec2 := httptest.NewRecorder()
+	env.handler.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("finalize with correlation header status = %d (body %q)", rec2.Code, rec2.Body.String())
+	}
+
+	var res2 commerce.Order
+	if err := json.NewDecoder(rec2.Body).Decode(&res2); err != nil {
+		t.Fatal(err)
+	}
+
+	var customCorrID string
+	if err := env.db.QueryRow(ctx, `SELECT correlation_id FROM outbox_events WHERE aggregate_id = $1 AND event_type = 'commerce.order.created.v1'`, res2.ID).Scan(&customCorrID); err != nil {
+		t.Fatal(err)
+	}
+	if customCorrID != "caller-supplied-corr-123" {
+		t.Fatalf("correlation_id = %q, want 'caller-supplied-corr-123'", customCorrID)
 	}
 }

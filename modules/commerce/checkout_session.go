@@ -534,7 +534,11 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 				err = tx.QueryRow(ctx, `
 					SELECT is_available FROM supplier_offer_availability WHERE supplier_offer_id = $1
 				`, *slSupplierOfferID).Scan(&isAvailable)
-				if err == nil && !isAvailable {
+				if err != nil {
+					if !errors.Is(err, pgx.ErrNoRows) {
+						return translatePGError(err, "revalidate supplier offer availability")
+					}
+				} else if !isAvailable {
 					return ErrListingUnavailable
 				}
 			}
@@ -612,7 +616,11 @@ func (r Repository) FinalizeCheckout(ctx context.Context, storeID string, reques
 		orderCreatedAt = orderCreatedAt.UTC()
 
 		// 22. Confirmation Deadline
-		confirmationDeadlineAt := orderCreatedAt.Add(DefaultConfirmationDuration)
+		duration := r.OrderConfirmationDuration
+		if duration <= 0 {
+			duration = DefaultConfirmationDuration
+		}
+		confirmationDeadlineAt := orderCreatedAt.Add(duration)
 
 		// 27. Create Held Reservations for each line
 		orderItems := make([]OrderItem, 0, len(allocations))
