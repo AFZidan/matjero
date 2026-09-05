@@ -1,7 +1,9 @@
 package outbox_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -168,7 +170,6 @@ func TestOutboxStaleLeaseCanBeReclaimed(t *testing.T) {
 		t.Fatalf("claim A failed: %v", err)
 	}
 
-	// Fast-forward claim timestamp to simulate lease expiration
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET publish_claimed_at = clock_timestamp() - interval '1 minute'
@@ -211,7 +212,6 @@ func TestOutboxStaleAckCannotMarkPublished(t *testing.T) {
 	}
 
 	claimB := uuid.NewString()
-	// Force update claim to claimB (simulating lease expiration and reclaim)
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET publish_claim_id = $1::uuid, publish_claimed_at = clock_timestamp()
@@ -252,7 +252,6 @@ func TestOutboxLostClaimSkipsPublish(t *testing.T) {
 		t.Fatalf("claim A: %v", err)
 	}
 
-	// Simulate claim loss by clearing publish_claim_id
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET publish_claim_id = NULL
@@ -324,31 +323,95 @@ func TestOutboxRenewClaimAndLoadReturnsCompleteEnvelope(t *testing.T) {
 	}
 }
 
-func TestOutboxLongBatchRenewsNearExpiry(t *testing.T) {
+func TestOutboxNearExpiryDBAuthoritativeRenewal(t *testing.T) {
 	db, ctx := setupOutboxDB(t)
 	store := outbox.NewStore()
 
-	env := sampleEnvelope()
-	tx, err := db.Pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin tx: %v", err)
-	}
-	if err := store.Enqueue(ctx, tx, env); err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatalf("commit: %v", err)
+	env1 := sampleEnvelope()
+	env2 := sampleEnvelope()
+	env3 := sampleEnvelope()
+	env4 := sampleEnvelope()
+
+	for _, env := range []events.EventEnvelope{env1, env2, env3, env4} {
+		tx, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		if err := store.Enqueue(ctx, tx, env); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
 	}
 
 	claimID := uuid.NewString()
-	claimed, err := store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
-	if err != nil || len(claimed) != 1 {
-		t.Fatalf("claim batch failed: %v", err)
+	claimIDOther := uuid.NewString()
+
+	_, err := store.ClaimBatch(ctx, db.Pool, claimID, 3, 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim batch: %v", err)
+	}
+	_, err = store.ClaimBatch(ctx, db.Pool, claimIDOther, 1, 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim batch other: %v", err)
 	}
 
-	err = store.RenewBatchNearExpiry(ctx, db.Pool, claimed, claimID, 30*time.Second)
+	// 1. Healthy claim (env1): remaining lease = 25s (> renewalMargin 10s)
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE outbox_events SET publish_claimed_at = clock_timestamp() - interval '5 seconds'
+		WHERE event_id = $1::uuid
+	`, env1.EventID)
+	if err != nil {
+		t.Fatalf("set healthy timestamp: %v", err)
+	}
+
+	// 2. Near-expiry claim (env2): remaining lease = 5s (<= renewalMargin 10s)
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE outbox_events SET publish_claimed_at = clock_timestamp() - interval '25 seconds'
+		WHERE event_id = $1::uuid
+	`, env2.EventID)
+	if err != nil {
+		t.Fatalf("set near-expiry timestamp: %v", err)
+	}
+
+	// 3. Expired claim (env3): remaining lease = -5s (expired)
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE outbox_events SET publish_claimed_at = clock_timestamp() - interval '35 seconds'
+		WHERE event_id = $1::uuid
+	`, env3.EventID)
+	if err != nil {
+		t.Fatalf("set expired timestamp: %v", err)
+	}
+
+	var t1Before, t2Before, t3Before, t4Before time.Time
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env1.EventID).Scan(&t1Before)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env2.EventID).Scan(&t2Before)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env3.EventID).Scan(&t3Before)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env4.EventID).Scan(&t4Before)
+
+	err = store.RenewBatchNearExpiry(ctx, db.Pool, []string{env1.EventID, env2.EventID, env3.EventID, env4.EventID}, claimID, 30*time.Second, 10*time.Second)
 	if err != nil {
 		t.Fatalf("RenewBatchNearExpiry error: %v", err)
+	}
+
+	var t1After, t2After, t3After, t4After time.Time
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env1.EventID).Scan(&t1After)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env2.EventID).Scan(&t2After)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env3.EventID).Scan(&t3After)
+	_ = db.Pool.QueryRow(ctx, `SELECT publish_claimed_at FROM outbox_events WHERE event_id = $1::uuid`, env4.EventID).Scan(&t4After)
+
+	if !t2After.After(t2Before) {
+		t.Errorf("expected near-expiry event %s to be renewed, got before=%v, after=%v", env2.EventID, t2Before, t2After)
+	}
+	if !t1After.Equal(t1Before) {
+		t.Errorf("expected healthy event %s NOT to be renewed, got before=%v, after=%v", env1.EventID, t1Before, t1After)
+	}
+	if !t3After.Equal(t3Before) {
+		t.Errorf("expected expired event %s NOT to be renewed, got before=%v, after=%v", env3.EventID, t3Before, t3After)
+	}
+	if !t4After.Equal(t4Before) {
+		t.Errorf("expected other worker claim %s NOT to be renewed, got before=%v, after=%v", env4.EventID, t4Before, t4After)
 	}
 }
 
@@ -419,7 +482,6 @@ func TestOutboxBackoffIsBounded(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		claimID := uuid.NewString()
-		// Fast forward next_attempt_at to make it claimable
 		_, err := db.Pool.Exec(ctx, `
 			UPDATE outbox_events
 			SET next_attempt_at = clock_timestamp() - interval '1 second'
@@ -455,6 +517,60 @@ func TestOutboxBackoffIsBounded(t *testing.T) {
 	}
 }
 
+func TestOutboxBackoffFormulaExactDBTime(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	env := sampleEnvelope()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := store.Enqueue(ctx, tx, env); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	expectedDelays := []int{1, 2, 4, 8, 16, 32, 64}
+
+	for i, expectedSec := range expectedDelays {
+		claimID := uuid.NewString()
+		_, err := db.Pool.Exec(ctx, `
+			UPDATE outbox_events
+			SET next_attempt_at = clock_timestamp() - interval '1 second'
+			WHERE event_id = $1::uuid
+		`, env.EventID)
+		if err != nil {
+			t.Fatalf("fast forward next_attempt_at: %v", err)
+		}
+
+		claimed, err := store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
+		if err != nil || len(claimed) != 1 {
+			t.Fatalf("attempt %d claim failed: %v", i+1, err)
+		}
+
+		released, err := store.ReleaseWithBackoff(ctx, db.Pool, env.EventID, claimID)
+		if err != nil || !released {
+			t.Fatalf("attempt %d release failed: %v", i+1, err)
+		}
+
+		var delaySec float64
+		err = db.Pool.QueryRow(ctx, `
+			SELECT EXTRACT(EPOCH FROM (next_attempt_at - clock_timestamp()))
+			FROM outbox_events WHERE event_id = $1::uuid
+		`, env.EventID).Scan(&delaySec)
+		if err != nil {
+			t.Fatalf("query backoff delay: %v", err)
+		}
+
+		if delaySec < float64(expectedSec)-0.5 || delaySec > float64(expectedSec)+0.5 {
+			t.Errorf("attempt %d: expected backoff delay ~%ds, got %.2fs", i+1, expectedSec, delaySec)
+		}
+	}
+}
+
 func TestOutboxRetryPreservesEventID(t *testing.T) {
 	db, ctx := setupOutboxDB(t)
 	store := outbox.NewStore()
@@ -480,7 +596,6 @@ func TestOutboxRetryPreservesEventID(t *testing.T) {
 	fakePub := &fakePublisher{failCount: 1}
 	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
 
-	// First batch run fails publish and schedules backoff
 	processed, err := proc.ProcessBatch(ctx)
 	if err != nil {
 		t.Fatalf("first ProcessBatch error: %v", err)
@@ -496,7 +611,6 @@ func TestOutboxRetryPreservesEventID(t *testing.T) {
 		t.Fatalf("expected 0 published events due to failure, got %d", publishedCount)
 	}
 
-	// Reset next_attempt_at to make it claimable again
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET next_attempt_at = clock_timestamp() - interval '1 second'
@@ -506,7 +620,6 @@ func TestOutboxRetryPreservesEventID(t *testing.T) {
 		t.Fatalf("reset next_attempt_at: %v", err)
 	}
 
-	// Second run succeeds
 	processed, err = proc.ProcessBatch(ctx)
 	if err != nil {
 		t.Fatalf("second ProcessBatch error: %v", err)
@@ -541,7 +654,6 @@ func TestOutboxConfirmThenCrashRepublishesSameEventID(t *testing.T) {
 		t.Fatalf("commit: %v", err)
 	}
 
-	// Worker 1 claims and publishes, but "crashes" before MarkPublished
 	claim1 := uuid.NewString()
 	claimed1, err := store.ClaimBatch(ctx, db.Pool, claim1, 1, 30*time.Second)
 	if err != nil || len(claimed1) != 1 {
@@ -551,9 +663,7 @@ func TestOutboxConfirmThenCrashRepublishesSameEventID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenewAndLoadEvent worker 1 error: %v", err)
 	}
-	// Simulate publication success to broker, but worker 1 crashes before calling MarkPublished
 
-	// Simulate lease expiration
 	_, err = db.Pool.Exec(ctx, `
 		UPDATE outbox_events
 		SET publish_claimed_at = clock_timestamp() - interval '1 minute'
@@ -563,7 +673,6 @@ func TestOutboxConfirmThenCrashRepublishesSameEventID(t *testing.T) {
 		t.Fatalf("expire claim1: %v", err)
 	}
 
-	// Worker 2 reclaims and publishes
 	claim2 := uuid.NewString()
 	claimed2, err := store.ClaimBatch(ctx, db.Pool, claim2, 1, 30*time.Second)
 	if err != nil || len(claimed2) != 1 {
@@ -672,6 +781,384 @@ func TestOrderCreatedPublishedCorrelationPreserved(t *testing.T) {
 	}
 }
 
+func TestOutboxMalformedPayloadTriggersBackoff(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+
+	eventID := uuid.NewString()
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, aggregate_version, event_type,
+			schema_version, payload, occurred_at
+		) VALUES (
+			$1::uuid, 'order', 'ord_bad', 1, 'commerce.order.created.v1',
+			1, '"{bad-json-payload"', clock_timestamp()
+		)
+	`, eventID)
+	if err != nil {
+		t.Fatalf("insert bad payload event: %v", err)
+	}
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	fakePub := &fakePublisher{}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("ProcessBatch error: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected 1 event processed, got %d", processed)
+	}
+
+	fakePub.mu.Lock()
+	publishedCount := len(fakePub.published)
+	fakePub.mu.Unlock()
+	if publishedCount != 0 {
+		t.Fatalf("expected 0 published events for malformed payload, got %d", publishedCount)
+	}
+
+	var attempts int
+	var claimID *string
+	var publishedAt *time.Time
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_attempts, publish_claim_id::text, published_at
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, eventID).Scan(&attempts, &claimID, &publishedAt)
+	if err != nil {
+		t.Fatalf("query event state: %v", err)
+	}
+
+	if attempts != 1 {
+		t.Errorf("expected publish_attempts = 1, got %d", attempts)
+	}
+	if claimID != nil {
+		t.Errorf("expected publish_claim_id = NULL after backoff, got %v", *claimID)
+	}
+	if publishedAt != nil {
+		t.Errorf("expected published_at = NULL, got %v", *publishedAt)
+	}
+}
+
+func TestOutboxInvalidEnvelopeFieldsTriggersBackoff(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+
+	eventID := uuid.NewString()
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, aggregate_version, event_type,
+			schema_version, payload, occurred_at
+		) VALUES (
+			$1::uuid, 'order', 'ord_bad', 1, '',
+			1, '{}', clock_timestamp()
+		)
+	`, eventID)
+	if err != nil {
+		t.Fatalf("insert invalid envelope event: %v", err)
+	}
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	fakePub := &fakePublisher{}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("ProcessBatch error: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("expected 1 event processed, got %d", processed)
+	}
+
+	var attempts int
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_attempts
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, eventID).Scan(&attempts)
+	if err != nil {
+		t.Fatalf("query event state: %v", err)
+	}
+	if attempts != 1 {
+		t.Errorf("expected publish_attempts = 1 after invalid envelope backoff, got %d", attempts)
+	}
+}
+
+func TestOutboxStaleMalformedReleaseProtection(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	eventID := uuid.NewString()
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, aggregate_version, event_type,
+			schema_version, payload, occurred_at
+		) VALUES (
+			$1::uuid, 'order', 'ord_bad', 1, '',
+			1, '{}', clock_timestamp()
+		)
+	`, eventID)
+	if err != nil {
+		t.Fatalf("insert invalid event: %v", err)
+	}
+
+	claimA := uuid.NewString()
+	claimB := uuid.NewString()
+
+	_, err = store.ClaimBatch(ctx, db.Pool, claimA, 1, 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim A: %v", err)
+	}
+
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE outbox_events SET publish_claim_id = $1::uuid WHERE event_id = $2::uuid
+	`, claimB, eventID)
+	if err != nil {
+		t.Fatalf("steal claim: %v", err)
+	}
+
+	released, err := store.ReleaseWithBackoff(ctx, db.Pool, eventID, claimA)
+	if err != nil {
+		t.Fatalf("ReleaseWithBackoff error: %v", err)
+	}
+	if released {
+		t.Errorf("expected ReleaseWithBackoff to return false for stale claim A, got true")
+	}
+
+	var currentClaim string
+	err = db.Pool.QueryRow(ctx, `SELECT publish_claim_id::text FROM outbox_events WHERE event_id = $1::uuid`, eventID).Scan(&currentClaim)
+	if err != nil || currentClaim != claimB {
+		t.Errorf("expected claim B to remain owner, got %s (err: %v)", currentClaim, err)
+	}
+}
+
+func TestOutboxClaimBatchUsesSkipLocked(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	env1 := sampleEnvelope()
+	env2 := sampleEnvelope()
+
+	for _, env := range []events.EventEnvelope{env1, env2} {
+		tx, err := db.Pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		if err := store.Enqueue(ctx, tx, env); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+
+	txLock, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin txLock: %v", err)
+	}
+	defer func() { _ = txLock.Rollback(ctx) }()
+
+	var lockedID string
+	err = txLock.QueryRow(ctx, `
+		SELECT event_id::text FROM outbox_events WHERE event_id = $1::uuid FOR UPDATE
+	`, env1.EventID).Scan(&lockedID)
+	if err != nil {
+		t.Fatalf("lock env1 error: %v", err)
+	}
+
+	claimIDB := uuid.NewString()
+	claimedB, err := store.ClaimBatch(ctx, db.Pool, claimIDB, 10, 30*time.Second)
+	if err != nil {
+		t.Fatalf("ClaimBatch worker B error: %v", err)
+	}
+
+	if len(claimedB) != 1 || claimedB[0] != env2.EventID {
+		t.Errorf("expected worker B to skip locked event %s and claim %s, got %v",
+			env1.EventID, env2.EventID, claimedB)
+	}
+}
+
+func TestOutboxLostClaimSkipsNetworkPublish(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	env := sampleEnvelope()
+	tx, err := db.Pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	if err := store.Enqueue(ctx, tx, env); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	claimID := uuid.NewString()
+	claimed, err := store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim batch failed: %v", err)
+	}
+
+	claimIDOther := uuid.NewString()
+	_, err = db.Pool.Exec(ctx, `
+		UPDATE outbox_events SET publish_claim_id = $1::uuid WHERE event_id = $2::uuid
+	`, claimIDOther, env.EventID)
+	if err != nil {
+		t.Fatalf("steal claim: %v", err)
+	}
+
+	fakePub := &fakePublisher{}
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	_, err = proc.ProcessBatch(ctx)
+	if err != nil {
+		t.Fatalf("ProcessBatch error: %v", err)
+	}
+
+	fakePub.mu.Lock()
+	pubCount := len(fakePub.published)
+	fakePub.mu.Unlock()
+	if pubCount != 0 {
+		t.Errorf("expected network publish call count = 0 on lost claim, got %d", pubCount)
+	}
+}
+
+func TestOutboxPayloadLargeInt64Precision(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+	store := outbox.NewStore()
+
+	largeIntStr := "9223372036854775800"
+	eventID := uuid.NewString()
+
+	_, err := db.Pool.Exec(ctx, `
+		INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, aggregate_version, event_type,
+			schema_version, payload, occurred_at
+		) VALUES (
+			$1::uuid, 'order', 'ord_large', 1, 'commerce.order.created.v1',
+			1, ('{"large_amount": ' || $2 || '}')::jsonb, clock_timestamp()
+		)
+	`, eventID, largeIntStr)
+	if err != nil {
+		t.Fatalf("insert large int64 payload: %v", err)
+	}
+
+	claimID := uuid.NewString()
+	_, err = store.ClaimBatch(ctx, db.Pool, claimID, 1, 30*time.Second)
+	if err != nil {
+		t.Fatalf("claim batch: %v", err)
+	}
+
+	loaded, err := store.RenewAndLoadEvent(ctx, db.Pool, eventID, claimID, 30*time.Second)
+	if err != nil {
+		t.Fatalf("RenewAndLoadEvent error: %v", err)
+	}
+
+	payloadJSON, err := json.Marshal(loaded.Payload)
+	if err != nil {
+		t.Fatalf("marshal loaded payload: %v", err)
+	}
+
+	if !bytes.Contains(payloadJSON, []byte(largeIntStr)) {
+		t.Errorf("expected marshaled payload to preserve exact large int64 string %s without precision loss, got %s",
+			largeIntStr, string(payloadJSON))
+	}
+}
+
+func TestMigration000013ExistingRowCompatibility(t *testing.T) {
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		dsn = "postgres://commerce:commerce@localhost:5432/commerce?sslmode=disable"
+	}
+	db := testdb.Open(t, dsn)
+	ctx := context.Background()
+
+	content000001, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000001_event_delivery_foundation.up.sql"))
+	if err != nil {
+		t.Fatalf("read 000001: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, string(content000001)); err != nil {
+		t.Fatalf("apply 000001: %v", err)
+	}
+
+	eventID := uuid.NewString()
+	_, err = db.Pool.Exec(ctx, `
+		INSERT INTO outbox_events (
+			event_id, aggregate_type, aggregate_id, aggregate_version, event_type,
+			schema_version, payload, occurred_at
+		) VALUES (
+			$1::uuid, 'order', 'ord_pre', 1, 'commerce.order.created.v1',
+			1, '{}', clock_timestamp()
+		)
+	`, eventID)
+	if err != nil {
+		t.Fatalf("insert pre-000013 event: %v", err)
+	}
+
+	content000013, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000013_outbox_publish_claims.up.sql"))
+	if err != nil {
+		t.Fatalf("read 000013: %v", err)
+	}
+	if _, err := db.Pool.Exec(ctx, string(content000013)); err != nil {
+		t.Fatalf("apply 000013 up: %v", err)
+	}
+
+	var claimID *string
+	var claimedAt *time.Time
+	var attempts int
+	var nextAttemptAt *time.Time
+
+	err = db.Pool.QueryRow(ctx, `
+		SELECT publish_claim_id::text, publish_claimed_at, publish_attempts, next_attempt_at
+		FROM outbox_events WHERE event_id = $1::uuid
+	`, eventID).Scan(&claimID, &claimedAt, &attempts, &nextAttemptAt)
+	if err != nil {
+		t.Fatalf("query migrated row: %v", err)
+	}
+
+	if claimID != nil {
+		t.Errorf("expected publish_claim_id = NULL, got %v", *claimID)
+	}
+	if claimedAt != nil {
+		t.Errorf("expected publish_claimed_at = NULL, got %v", *claimedAt)
+	}
+	if attempts != 0 {
+		t.Errorf("expected publish_attempts = 0, got %d", attempts)
+	}
+	if nextAttemptAt == nil {
+		t.Errorf("expected next_attempt_at NOT NULL, got nil")
+	}
+
+	store := outbox.NewStore()
+	myClaim := uuid.NewString()
+	claimed, err := store.ClaimBatch(ctx, db.Pool, myClaim, 1, 30*time.Second)
+	if err != nil || len(claimed) != 1 || claimed[0] != eventID {
+		t.Errorf("expected migrated pre-P5.6 row to be claimable immediately, got %v (err: %v)", claimed, err)
+	}
+
+	var indexDef string
+	err = db.Pool.QueryRow(ctx, `
+		SELECT indexdef FROM pg_indexes
+		WHERE tablename = 'outbox_events' AND indexname = 'outbox_events_unpublished_claim_idx'
+	`).Scan(&indexDef)
+	if err != nil {
+		t.Fatalf("query indexdef: %v", err)
+	}
+	if !bytes.Contains([]byte(indexDef), []byte("published_at IS NULL")) {
+		t.Errorf("expected index predicate to contain 'published_at IS NULL', got %s", indexDef)
+	}
+}
+
 func TestMigration000013UpDownUpSafety(t *testing.T) {
 	db, ctx := setupOutboxDB(t)
 
@@ -690,5 +1177,32 @@ func TestMigration000013UpDownUpSafety(t *testing.T) {
 
 	if _, err := db.Pool.Exec(ctx, string(upContent)); err != nil {
 		t.Fatalf("migration 000013 up again failed: %v", err)
+	}
+}
+
+func TestOutboxClaimIDGenerationFailure(t *testing.T) {
+	db, ctx := setupOutboxDB(t)
+
+	cfg, err := config.Load("test-service")
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	fakePub := &fakePublisher{}
+	proc := outbox.NewProcessor(cfg, db.Pool, fakePub, nil)
+
+	outbox.SetNewClaimUUIDForTest(func() (uuid.UUID, error) {
+		return uuid.Nil, errors.New("simulated entropy failure")
+	})
+	t.Cleanup(func() {
+		outbox.ResetNewClaimUUIDForTest()
+	})
+
+	processed, err := proc.ProcessBatch(ctx)
+	if err == nil {
+		t.Fatal("expected error on claim ID generation failure, got nil")
+	}
+	if processed != 0 {
+		t.Errorf("expected 0 rows processed, got %d", processed)
 	}
 }

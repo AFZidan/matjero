@@ -20,6 +20,8 @@ import (
 	"github.com/matjeroapps/core/packages/outbox"
 )
 
+type RabbitSetupFunc func(rabbitURL string) (*amqp.Connection, *amqp.Channel, messaging.Publisher, error)
+
 func main() {
 	if err := run(context.Background()); err != nil {
 		log.Fatal(err)
@@ -53,7 +55,25 @@ func run(ctx context.Context) error {
 
 	logger.Info("worker connected to postgres", slog.String("service", cfg.ServiceName))
 
-	backoff := 1 * time.Second
+	return runWorkerLoop(ctx, cfg, dbPool, logger, defaultSetupRabbit, 1*time.Second)
+}
+
+func waitContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func runWorkerLoop(ctx context.Context, cfg config.Config, dbPool outbox.DBExecutor, logger *slog.Logger, setupFn RabbitSetupFunc, initialBackoff time.Duration) error {
+	if initialBackoff <= 0 {
+		initialBackoff = 1 * time.Second
+	}
+	backoff := initialBackoff
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,13 +82,11 @@ func run(ctx context.Context) error {
 		default:
 		}
 
-		conn, ch, pub, err := setupRabbit(cfg.RabbitMQURL)
+		conn, ch, pub, err := setupFn(cfg.RabbitMQURL)
 		if err != nil {
 			logger.Error("rabbitmq connection failed, retrying...", slog.String("error", err.Error()), slog.Duration("backoff", backoff))
-			select {
-			case <-ctx.Done():
+			if waitErr := waitContext(ctx, backoff); waitErr != nil {
 				return nil
-			case <-time.After(backoff):
 			}
 			if backoff < 10*time.Second {
 				backoff *= 2
@@ -76,13 +94,17 @@ func run(ctx context.Context) error {
 			continue
 		}
 
-		backoff = 1 * time.Second
+		backoff = initialBackoff
 		logger.Info("worker connected to rabbitmq and confirmed topology")
 
 		proc := outbox.NewProcessor(cfg, dbPool, pub, logger)
 		err = proc.Run(ctx)
-		_ = ch.Close()
-		_ = conn.Close()
+		if ch != nil {
+			_ = ch.Close()
+		}
+		if conn != nil {
+			_ = conn.Close()
+		}
 
 		if errors.Is(ctx.Err(), context.Canceled) {
 			logger.Info("worker shutdown complete")
@@ -90,12 +112,12 @@ func run(ctx context.Context) error {
 		}
 
 		if err != nil {
-			logger.Warn("processor stopped with error, reconnecting...", slog.String("error", err.Error()))
+			logger.Warn("processor session stopped, reconnecting...", slog.String("error", err.Error()))
 		}
 	}
 }
 
-func setupRabbit(rabbitURL string) (*amqp.Connection, *amqp.Channel, messaging.Publisher, error) {
+func defaultSetupRabbit(rabbitURL string) (*amqp.Connection, *amqp.Channel, messaging.Publisher, error) {
 	conn, err := amqp.Dial(rabbitURL)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("dial rabbitmq: %w", err)

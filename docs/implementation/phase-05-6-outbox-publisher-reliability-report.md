@@ -6,7 +6,7 @@ Phase 5.6 implements a production-grade, multi-publisher reliable Transactional 
 
 - **Base SHA:** `65a53f47b393775ff27e733c1ae3289fe79627aa`
 - **Branch:** `feature/p5-6-outbox-publisher-reliability`
-- **Head SHA:** `6e8e7720abbc9169d0db1a46473cd75b3d3348dc`
+- **Head SHA:** `73359a9e190a3e6dd4b72c02766d85608575859e`
 - **PR:** `https://github.com/matjeroapps/core/pull/32`
 - **Migration F:** `000013_outbox_publish_claims` (up/down)
 
@@ -68,7 +68,18 @@ Added to `packages/config/config.go`:
    RETURNING outbox_events.event_id::text;
    ```
 
-2. **Per-Event Ownership Revalidation Before Publish:**
+2. **DB-Authoritative Near-Expiry Renewal:**
+   ```sql
+   UPDATE outbox_events
+   SET publish_claimed_at = clock_timestamp()
+   WHERE event_id = ANY($1::uuid[])
+     AND publish_claim_id = $2::uuid
+     AND published_at IS NULL
+     AND publish_claimed_at >= (clock_timestamp() - $3::interval)
+     AND (publish_claimed_at + $3::interval - clock_timestamp()) <= $4::interval;
+   ```
+
+3. **Per-Event Ownership Revalidation Before Publish:**
    Immediately prior to every network publish call, revalidates ownership and returns the complete `EventEnvelope`:
    ```sql
    UPDATE outbox_events
@@ -81,7 +92,7 @@ Added to `packages/config/config.go`:
    ```
    If zero rows are returned, the event claim was lost/expired and publication is skipped.
 
-3. **Guarded Mark Published:**
+4. **Guarded Mark Published:**
    ```sql
    UPDATE outbox_events
    SET published_at = clock_timestamp(),
@@ -92,7 +103,7 @@ Added to `packages/config/config.go`:
      AND published_at IS NULL;
    ```
 
-4. **Exponential Failure Backoff:**
+5. **Exponential Failure Backoff:**
    ```sql
    UPDATE outbox_events
    SET publish_attempts = publish_attempts + 1,
@@ -120,21 +131,29 @@ Added to `packages/config/config.go`:
 
 | Matrix Case | Requirement Description | Named Test | Result |
 |---|---|---|---|
-| **49** | Batch lease renewal | `TestOutboxLongBatchRenewsNearExpiry` | PASS |
-| **50** | Multi-publisher claim isolation & `SKIP LOCKED` | `TestOutboxTwoPublishersNeverClaimSameEvent` | PASS |
+| **49** | DB-Authoritative Near-Expiry Renewal | `TestOutboxNearExpiryDBAuthoritativeRenewal` | PASS |
+| **50** | Multi-publisher claim isolation & `SKIP LOCKED` | `TestOutboxTwoPublishersNeverClaimSameEvent`, `TestOutboxClaimBatchUsesSkipLocked` | PASS |
 | **51** | Stale lease recovery | `TestOutboxStaleLeaseCanBeReclaimed` | PASS |
 | **52** | Stale ACK rejection | `TestOutboxStaleAckCannotMarkPublished` | PASS |
-| **53** | Broker failure backoff & formula | `TestOutboxPublishFailureSchedulesBackoff`, `TestOutboxBackoffIsBounded` | PASS |
+| **53** | Broker failure backoff & formula | `TestOutboxPublishFailureSchedulesBackoff`, `TestOutboxBackoffIsBounded`, `TestOutboxBackoffFormulaExactDBTime` | PASS |
 | **54** | Confirm-then-crash duplicate safety | `TestOutboxConfirmThenCrashRepublishesSameEventID` | PASS |
 | **55** | Consumer Inbox duplicate suppression | `TestInboxDuplicateSameConsumerProcessedOnce` | PASS |
 | **56** | Multi-consumer Inbox independence | `TestInboxSameEventDifferentConsumersEachProcessOnce` | PASS |
 | **78** | Per-publish claim renewal | `TestOutboxRenewClaimAndLoadReturnsCompleteEnvelope` | PASS |
-| **79** | Lost claim skips network publish | `TestOutboxLostClaimSkipsPublish` | PASS |
-| **80** | Confirm timeout < claim lease | `TestConfigValidatesConfirmTimeoutLessThanLease` | PASS |
+| **79** | Lost claim skips network publish | `TestOutboxLostClaimSkipsNetworkPublish` | PASS |
+| **80** | Confirm timeout < claim lease & runtime timeout | `TestConfigValidatesConfirmTimeoutLessThanLease`, `TestRabbitPublisherConfirmTimeoutFails` | PASS |
 | **81** | Ambiguous broker delivery safe | `TestOutboxConfirmThenCrashRepublishesSameEventID` | PASS |
 | **96** | Complete `OrderCreated` envelope matches Outbox | `TestOrderCreatedPublishedEnvelopeMatchesOutbox` | PASS |
 | **97** | Retrying `OrderStatusChanged` uses stable `event_id` | `TestOutboxRetryPreservesEventID` | PASS |
 | **98** | HTTP correlation propagation preserved | `TestOrderCreatedPublishedCorrelationPreserved` | PASS |
+
+### Additional Reliability Verification
+
+- **Worker Reconnect Loop:** `TestWorkerInitialRabbitSetupFailureRetries`, `TestWorkerRuntimeTransportFailureReconnects`, `TestWorkerGracefulShutdownOnContextCancel` (PASS)
+- **Large `int64` Precision Preservation:** `TestOutboxPayloadLargeInt64Precision` (PASS)
+- **Existing Row Migration Compatibility:** `TestMigration000013ExistingRowCompatibility` (PASS)
+- **Malformed Persisted Event Guarded Backoff:** `TestOutboxMalformedPayloadTriggersBackoff`, `TestOutboxInvalidEnvelopeFieldsTriggersBackoff`, `TestOutboxStaleMalformedReleaseProtection` (PASS)
+- **Secure UUID Entropy Failure Handling:** `TestOutboxClaimIDGenerationFailure` (PASS)
 
 ---
 

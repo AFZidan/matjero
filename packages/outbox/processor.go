@@ -2,16 +2,31 @@ package outbox
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/matjeroapps/core/packages/config"
 	"github.com/matjeroapps/core/packages/events"
+	"github.com/matjeroapps/core/packages/messaging"
 )
+
+var newClaimUUID = func() (uuid.UUID, error) {
+	return uuid.NewRandom()
+}
+
+func SetNewClaimUUIDForTest(fn func() (uuid.UUID, error)) {
+	newClaimUUID = fn
+}
+
+func ResetNewClaimUUIDForTest() {
+	newClaimUUID = func() (uuid.UUID, error) {
+		return uuid.NewRandom()
+	}
+}
 
 type EventPublisher interface {
 	PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error
@@ -38,7 +53,7 @@ func NewProcessor(cfg config.Config, db DBExecutor, publisher EventPublisher, lo
 	}
 }
 
-// Run executes the outbox processing loop until ctx is canceled.
+// Run executes the outbox processing loop until ctx is canceled or a transport failure occurs.
 func (p *Processor) Run(ctx context.Context) error {
 	p.logger.Info("outbox processor loop started",
 		slog.Duration("poll_interval", p.cfg.OutboxPollInterval),
@@ -58,8 +73,13 @@ func (p *Processor) Run(ctx context.Context) error {
 		}
 
 		processedCount, err := p.ProcessBatch(ctx)
-		if err != nil && !errors.Is(err, context.Canceled) {
-			p.logger.Error("outbox batch processing error", slog.String("error", err.Error()))
+		if err != nil {
+			if messaging.IsPublisherUnavailable(err) {
+				return err
+			}
+			if !errors.Is(err, context.Canceled) {
+				p.logger.Error("outbox batch processing error", slog.String("error", err.Error()))
+			}
 		}
 
 		if processedCount == 0 || err != nil {
@@ -73,7 +93,12 @@ func (p *Processor) Run(ctx context.Context) error {
 }
 
 func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
-	claimID := newClaimID()
+	claimUUID, err := newClaimUUID()
+	if err != nil {
+		return 0, fmt.Errorf("generate claim uuid: %w", err)
+	}
+	claimID := claimUUID.String()
+
 	claimedIDs, err := p.store.ClaimBatch(ctx, p.db, claimID, p.cfg.OutboxBatchSize, p.cfg.OutboxClaimLeaseDuration)
 	if err != nil {
 		return 0, fmt.Errorf("claim batch: %w", err)
@@ -87,21 +112,16 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 		slog.Int("batch_size", len(claimedIDs)),
 	)
 
-	batchStartTime := time.Now()
+	// DB-authoritative near-expiry renewal check
+	_ = p.store.RenewBatchNearExpiry(ctx, p.db, claimedIDs, claimID, p.cfg.OutboxClaimLeaseDuration, p.cfg.OutboxClaimRenewalMargin)
+
+	var transportErr error
 
 	for _, eventID := range claimedIDs {
 		select {
 		case <-ctx.Done():
 			return 0, ctx.Err()
 		default:
-		}
-
-		if time.Since(batchStartTime) >= (p.cfg.OutboxClaimLeaseDuration - p.cfg.OutboxClaimRenewalMargin) {
-			if err := p.store.RenewBatchNearExpiry(ctx, p.db, claimedIDs, claimID, p.cfg.OutboxClaimLeaseDuration); err != nil {
-				p.logger.Warn("batch lease renewal failed", slog.String("claim_id", claimID), slog.String("error", err.Error()))
-			} else {
-				batchStartTime = time.Now()
-			}
 		}
 
 		envelope, err := p.store.RenewAndLoadEvent(ctx, p.db, eventID, claimID, p.cfg.OutboxClaimLeaseDuration)
@@ -111,6 +131,19 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 					slog.String("event_id", eventID),
 					slog.String("claim_id", claimID),
 				)
+				continue
+			}
+			if errors.Is(err, ErrInvalidEnvelope) {
+				p.logger.Error("malformed outbox event envelope, scheduling backoff",
+					slog.String("event_id", eventID),
+					slog.String("error", err.Error()),
+				)
+				if _, relErr := p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID); relErr != nil {
+					p.logger.Error("failed to release malformed outbox event with backoff",
+						slog.String("event_id", eventID),
+						slog.String("error", relErr.Error()),
+					)
+				}
 				continue
 			}
 			p.logger.Error("failed to renew and load outbox event",
@@ -127,7 +160,12 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 				slog.String("event_type", envelope.EventType),
 				slog.String("error", err.Error()),
 			)
-			_, _ = p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID)
+			if _, relErr := p.store.ReleaseWithBackoff(ctx, p.db, eventID, claimID); relErr != nil {
+				p.logger.Error("failed to release unknown routing outbox event with backoff",
+					slog.String("event_id", eventID),
+					slog.String("error", relErr.Error()),
+				)
+			}
 			continue
 		}
 
@@ -153,6 +191,11 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 					slog.String("claim_id", claimID),
 				)
 			}
+
+			if messaging.IsPublisherUnavailable(pubErr) {
+				transportErr = fmt.Errorf("%w: %v", messaging.ErrPublisherUnavailable, pubErr)
+				break
+			}
 			continue
 		}
 
@@ -175,16 +218,9 @@ func (p *Processor) ProcessBatch(ctx context.Context) (int, error) {
 		}
 	}
 
-	return len(claimedIDs), nil
-}
-
-func newClaimID() string {
-	var b [16]byte
-	_, err := io.ReadFull(rand.Reader, b[:])
-	if err != nil {
-		return fmt.Sprintf("claim-%d", time.Now().UnixNano())
+	if transportErr != nil {
+		return len(claimedIDs), transportErr
 	}
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+
+	return len(claimedIDs), nil
 }

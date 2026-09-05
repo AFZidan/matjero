@@ -3,12 +3,22 @@ package messaging
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	"github.com/matjeroapps/core/packages/events"
 )
+
+var ErrPublisherUnavailable = errors.New("publisher unavailable")
+
+func IsPublisherUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrPublisherUnavailable) || errors.Is(err, amqp.ErrClosed)
+}
 
 type Publisher interface {
 	PublishEvent(ctx context.Context, exchange, routingKey string, event events.EventEnvelope) error
@@ -29,11 +39,11 @@ type rabbitPublication struct {
 }
 
 func NewRabbitPublisher(channel *amqp.Channel) (*RabbitPublisher, error) {
-	if channel == nil {
-		return nil, fmt.Errorf("rabbitmq channel is required")
+	if channel == nil || channel.IsClosed() {
+		return nil, fmt.Errorf("%w: rabbitmq channel is required", ErrPublisherUnavailable)
 	}
 	if err := channel.Confirm(false); err != nil {
-		return nil, fmt.Errorf("enable channel confirm mode: %w", err)
+		return nil, fmt.Errorf("%w: enable channel confirm mode: %v", ErrPublisherUnavailable, err)
 	}
 	return &RabbitPublisher{channel: channel}, nil
 }
@@ -67,8 +77,8 @@ func (p *RabbitPublisher) PublishMessage(ctx context.Context, exchange, routingK
 }
 
 func (p *RabbitPublisher) publish(ctx context.Context, publication rabbitPublication) error {
-	if p.channel == nil {
-		return fmt.Errorf("rabbitmq channel is required")
+	if p.channel == nil || p.channel.IsClosed() {
+		return fmt.Errorf("%w: rabbitmq channel is closed", ErrPublisherUnavailable)
 	}
 
 	body, err := json.Marshal(publication.payload)
@@ -92,15 +102,21 @@ func (p *RabbitPublisher) publish(ctx context.Context, publication rabbitPublica
 		},
 	)
 	if err != nil {
+		if errors.Is(err, amqp.ErrClosed) || p.channel.IsClosed() {
+			return fmt.Errorf("%w: publish message: %v", ErrPublisherUnavailable, err)
+		}
 		return fmt.Errorf("publish message: %w", err)
 	}
 
 	if confirmation == nil {
-		return fmt.Errorf("channel is not in confirm mode")
+		return fmt.Errorf("%w: channel is not in confirm mode", ErrPublisherUnavailable)
 	}
 
 	acked, err := confirmation.WaitContext(ctx)
 	if err != nil {
+		if errors.Is(err, amqp.ErrClosed) || p.channel.IsClosed() {
+			return fmt.Errorf("%w: wait publish confirm: %v", ErrPublisherUnavailable, err)
+		}
 		return fmt.Errorf("wait publish confirm: %w", err)
 	}
 	if !acked {

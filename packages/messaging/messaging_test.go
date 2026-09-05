@@ -21,6 +21,47 @@ func TestRabbitPublisherNilChannelFails(t *testing.T) {
 	}
 }
 
+func TestRabbitPublisherConfirmTimeoutFails(t *testing.T) {
+	rabbitURL := os.Getenv("TEST_RABBITMQ_URL")
+	if rabbitURL == "" {
+		t.Skip("TEST_RABBITMQ_URL not set")
+	}
+
+	conn, err := amqp.Dial(rabbitURL)
+	if err != nil {
+		t.Fatalf("RabbitMQ connection failed at %s: %v", rabbitURL, err)
+	}
+	defer conn.Close()
+
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatalf("open channel: %v", err)
+	}
+	defer ch.Close()
+
+	pub, err := messaging.NewRabbitPublisher(ch)
+	if err != nil {
+		t.Fatalf("NewRabbitPublisher error: %v", err)
+	}
+
+	env := events.EventEnvelope{
+		EventID:       uuid.NewString(),
+		EventType:     "commerce.order.created.v1",
+		SchemaVersion: 1,
+		OccurredAt:    time.Now(),
+		Payload:       map[string]any{},
+	}
+
+	// Canceled context should fail publish confirm immediately
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err = pub.PublishEvent(ctx, "commerce.events", "order.created", env)
+	if err == nil {
+		t.Fatal("expected publish with canceled context to fail, got nil")
+	}
+}
+
 func TestRabbitMQRealBrokerIntegration(t *testing.T) {
 	rabbitURL := os.Getenv("TEST_RABBITMQ_URL")
 	if rabbitURL == "" {
@@ -29,7 +70,7 @@ func TestRabbitMQRealBrokerIntegration(t *testing.T) {
 
 	conn, err := amqp.Dial(rabbitURL)
 	if err != nil {
-		t.Skipf("RabbitMQ unavailable at %s: %v", rabbitURL, err)
+		t.Fatalf("RabbitMQ connection failed at %s: %v", rabbitURL, err)
 	}
 	defer conn.Close()
 

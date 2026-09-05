@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 )
 
 var ErrClaimLost = errors.New("outbox claim lost or expired")
+var ErrInvalidEnvelope = errors.New("invalid outbox event envelope")
 
 type DBExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
@@ -168,8 +170,10 @@ func (Store) RenewAndLoadEvent(ctx context.Context, db DBExecutor, eventID strin
 	}
 
 	var payload map[string]any
-	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-		return nil, fmt.Errorf("unmarshal outbox event payload: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(payloadBytes))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return nil, fmt.Errorf("%w: unmarshal payload: %v", ErrInvalidEnvelope, err)
 	}
 
 	env := &events.EventEnvelope{
@@ -190,13 +194,13 @@ func (Store) RenewAndLoadEvent(ctx context.Context, db DBExecutor, eventID strin
 	}
 
 	if err := env.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid envelope in outbox: %w", err)
+		return nil, fmt.Errorf("%w: validate envelope: %v", ErrInvalidEnvelope, err)
 	}
 
 	return env, nil
 }
 
-func (Store) RenewBatchNearExpiry(ctx context.Context, db DBExecutor, eventIDs []string, claimID string, leaseDuration time.Duration) error {
+func (Store) RenewBatchNearExpiry(ctx context.Context, db DBExecutor, eventIDs []string, claimID string, leaseDuration time.Duration, renewalMargin time.Duration) error {
 	if len(eventIDs) == 0 {
 		return nil
 	}
@@ -206,8 +210,12 @@ func (Store) RenewBatchNearExpiry(ctx context.Context, db DBExecutor, eventIDs [
 	if leaseDuration <= 0 {
 		return fmt.Errorf("lease duration must be greater than zero")
 	}
+	if renewalMargin <= 0 {
+		return fmt.Errorf("renewal margin must be greater than zero")
+	}
 
 	leaseInterval := fmt.Sprintf("%d microseconds", leaseDuration.Microseconds())
+	marginInterval := fmt.Sprintf("%d microseconds", renewalMargin.Microseconds())
 
 	_, err := db.Exec(ctx, `
 		UPDATE outbox_events
@@ -215,10 +223,11 @@ func (Store) RenewBatchNearExpiry(ctx context.Context, db DBExecutor, eventIDs [
 		WHERE event_id = ANY($1::uuid[])
 		  AND publish_claim_id = $2::uuid
 		  AND published_at IS NULL
-		  AND publish_claimed_at >= (clock_timestamp() - $3::interval);
-	`, eventIDs, claimID, leaseInterval)
+		  AND publish_claimed_at >= (clock_timestamp() - $3::interval)
+		  AND (publish_claimed_at + $3::interval - clock_timestamp()) <= $4::interval;
+	`, eventIDs, claimID, leaseInterval, marginInterval)
 	if err != nil {
-		return fmt.Errorf("renew batch outbox claims: %w", err)
+		return fmt.Errorf("renew batch outbox claims near expiry: %w", err)
 	}
 	return nil
 }
